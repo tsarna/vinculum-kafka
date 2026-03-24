@@ -37,6 +37,11 @@ const (
 	// DefaultTopicSlashToDot replaces "/" with "." in the vinculum topic to
 	// derive the Kafka topic (e.g. "sensor/temp/reading" → "sensor.temp.reading").
 	DefaultTopicSlashToDot
+
+	// DefaultTopicIgnore silently succeeds without producing anything when no
+	// topic_mapping matches. Useful when a producer owns only a subset of topics
+	// and multiple producers share a client.
+	DefaultTopicIgnore
 )
 
 // KeyFunc resolves the Kafka partition key for a message. Returns nil to omit
@@ -74,6 +79,9 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 	kafkaTopic, key, err := p.resolveTopicAndKey(topic, msg, fields)
 	if err != nil {
 		return err
+	}
+	if kafkaTopic == "" {
+		return nil // DefaultTopicIgnore — no match, silently skip
 	}
 
 	value, err := serializePayload(msg)
@@ -151,6 +159,8 @@ func (p *KafkaProducer) resolveTopicAndKey(topic string, msg any, fields map[str
 	switch p.defaultTransform {
 	case DefaultTopicSlashToDot:
 		return strings.ReplaceAll(topic, "/", "."), nil, nil
+	case DefaultTopicIgnore:
+		return "", nil, nil
 	default:
 		return "", nil, fmt.Errorf("kafka producer: no topic mapping matched for topic %q and default_topic_transform is error", topic)
 	}
