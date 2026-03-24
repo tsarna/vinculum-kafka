@@ -40,7 +40,7 @@ func makeConsumer(subs []TopicSubscription, target bus.Subscriber) *KafkaConsume
 
 // staticTopicFunc always returns the given vinculum topic.
 func staticTopicFunc(topic string) VinculumTopicFunc {
-	return func(_, _ string, _ map[string]string, _ any) (string, error) {
+	return func(_ string, _ *string, _ map[string]string, _ any) (string, error) {
 		return topic, nil
 	}
 }
@@ -124,11 +124,12 @@ func TestProcessRecord_CorrectArgs(t *testing.T) {
 	c := makeConsumer([]TopicSubscription{
 		{
 			KafkaTopic: "sensor.readings",
-			VinculumTopicFunc: func(kafkaTopic, key string, fields map[string]string, msg any) (string, error) {
+			VinculumTopicFunc: func(kafkaTopic string, key *string, fields map[string]string, msg any) (string, error) {
 				assert.Equal(t, "sensor.readings", kafkaTopic)
-				assert.Equal(t, "device42", key)
+				require.NotNil(t, key)
+				assert.Equal(t, "device42", *key)
 				assert.Equal(t, "eu-west", fields["region"])
-				return "sensor/" + key + "/reading", nil
+				return "sensor/" + *key + "/reading", nil
 			},
 		},
 	}, target)
@@ -154,7 +155,7 @@ func TestProcessRecord_VinculumTopicFuncError(t *testing.T) {
 	c := makeConsumer([]TopicSubscription{
 		{
 			KafkaTopic: "foo",
-			VinculumTopicFunc: func(_, _ string, _ map[string]string, _ any) (string, error) {
+			VinculumTopicFunc: func(_ string, _ *string, _ map[string]string, _ any) (string, error) {
 				return "", errors.New("bad expression")
 			},
 		},
@@ -186,4 +187,28 @@ func TestProcessRecord_NoKeyNoHeaders(t *testing.T) {
 	assert.Equal(t, "a/b", target.topic)
 	assert.Equal(t, "hello", target.msg)
 	assert.Nil(t, target.fields)
+}
+
+func TestProcessRecord_NilKeyIsNilPointer(t *testing.T) {
+	var gotKey *string
+	c := makeConsumer([]TopicSubscription{
+		{
+			KafkaTopic: "foo",
+			VinculumTopicFunc: func(_ string, key *string, _ map[string]string, _ any) (string, error) {
+				gotKey = key
+				return "a/b", nil
+			},
+		},
+	}, &captureSubscriber{})
+
+	// Record with no key (nil slice)
+	err := c.processRecord(context.Background(), &kgo.Record{Topic: "foo", Value: []byte(`{}`)})
+	require.NoError(t, err)
+	assert.Nil(t, gotKey)
+
+	// Record with an explicit empty key
+	err = c.processRecord(context.Background(), &kgo.Record{Topic: "foo", Key: []byte{}, Value: []byte(`{}`)})
+	require.NoError(t, err)
+	require.NotNil(t, gotKey)
+	assert.Equal(t, "", *gotKey)
 }

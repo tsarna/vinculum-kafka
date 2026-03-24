@@ -27,11 +27,11 @@ const (
 
 // VinculumTopicFunc resolves the vinculum topic for an inbound Kafka record.
 // It is called per message. kafkaTopic is the source Kafka topic; key is the
-// record key decoded as UTF-8 (empty string if no key); fields are populated
-// from record headers; msg is the deserialized payload.
+// record key decoded as UTF-8, or nil if the record has no key; fields are
+// populated from record headers; msg is the deserialized payload.
 //
 // Constructed by the config layer to avoid a circular import dependency.
-type VinculumTopicFunc func(kafkaTopic, key string, fields map[string]string, msg any) (string, error)
+type VinculumTopicFunc func(kafkaTopic string, key *string, fields map[string]string, msg any) (string, error)
 
 // TopicSubscription maps one Kafka topic to a vinculum topic resolver.
 type TopicSubscription struct {
@@ -123,7 +123,11 @@ func (c *KafkaConsumer) pollLoop(ctx context.Context) {
 
 func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error {
 	fields := headersToFields(r.Headers)
-	key := string(r.Key)
+	var key *string
+	if r.Key != nil {
+		s := string(r.Key)
+		key = &s
+	}
 	msg := deserializePayload(r.Value)
 
 	sub, err := c.findSubscription(r.Topic)
