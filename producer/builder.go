@@ -3,6 +3,7 @@ package producer
 import (
 	"errors"
 
+	"github.com/tsarna/vinculum-bus/o11y"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
@@ -14,6 +15,7 @@ type ProducerBuilder struct {
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
 	logger           *zap.Logger
+	metricsProvider  o11y.MetricsProvider
 }
 
 // NewProducer returns a ProducerBuilder with default settings:
@@ -51,6 +53,13 @@ func (b *ProducerBuilder) WithProduceMode(m ProduceMode) *ProducerBuilder {
 	return b
 }
 
+// WithMetricsProvider sets the metrics provider used to instrument the producer.
+// If nil (the default), no metrics are collected.
+func (b *ProducerBuilder) WithMetricsProvider(p o11y.MetricsProvider) *ProducerBuilder {
+	b.metricsProvider = p
+	return b
+}
+
 // WithLogger sets the logger used for async produce errors.
 func (b *ProducerBuilder) WithLogger(l *zap.Logger) *ProducerBuilder {
 	if l != nil {
@@ -70,5 +79,6 @@ func (b *ProducerBuilder) Build() (*KafkaProducer, error) {
 		defaultTransform: b.defaultTransform,
 		produceMode:      b.produceMode,
 		logger:           b.logger,
+		metrics:          NewProducerMetrics(b.metricsProvider),
 	}, nil
 }

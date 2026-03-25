@@ -52,6 +52,7 @@ type KafkaConsumer struct {
 	commitMode    CommitMode
 	dlqTopic      string // optional; if non-empty, failed records are produced here
 	logger        *zap.Logger
+	metrics       *ConsumerMetrics
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -126,11 +127,31 @@ func (c *KafkaConsumer) pollLoop(ctx context.Context) {
 				if ctx.Err() == nil {
 					c.logger.Error("kafka consumer: commit failed", zap.Error(err))
 				}
+			} else {
+				c.metrics.RecordCommit(ctx)
 			}
 		}
 
+		c.updateLag(ctx, fetches)
 		c.client.AllowRebalance()
 	}
+}
+
+// updateLag calculates consumer lag from the fetch result and updates the lag gauge.
+// kgo.Client.Lag() is not available in v1.18.1, so lag is derived from HighWatermark
+// and the offset of the last record in each fetched partition.
+// For caught-up partitions (no records returned), lag is reported as 0.
+func (c *KafkaConsumer) updateLag(ctx context.Context, fetches kgo.Fetches) {
+	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+		var lag int64
+		if len(p.Records) > 0 {
+			lastOffset := p.Records[len(p.Records)-1].Offset
+			if lag = p.HighWatermark - (lastOffset + 1); lag < 0 {
+				lag = 0
+			}
+		}
+		c.metrics.UpdateLag(ctx, p.Topic, p.Partition, lag)
+	})
 }
 
 func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error {
@@ -144,15 +165,25 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 
 	sub, err := c.findSubscription(r.Topic)
 	if err != nil {
+		c.metrics.RecordError(ctx, r.Topic)
 		return err
 	}
 
 	vinculumTopic, err := sub.VinculumTopicFunc(r.Topic, key, fields, msg)
 	if err != nil {
+		c.metrics.RecordError(ctx, r.Topic)
 		return fmt.Errorf("kafka consumer: resolve vinculum topic for %q: %w", r.Topic, err)
 	}
 
-	return c.target.OnEvent(ctx, vinculumTopic, msg, fields)
+	start := time.Now()
+	err = c.target.OnEvent(ctx, vinculumTopic, msg, fields)
+	c.metrics.RecordProcessDuration(ctx, r.Topic, time.Since(start))
+	if err != nil {
+		c.metrics.RecordError(ctx, r.Topic)
+		return err
+	}
+	c.metrics.RecordReceived(ctx, r.Topic)
+	return nil
 }
 
 func (c *KafkaConsumer) sendToDLQ(ctx context.Context, r *kgo.Record, procErr error) error {

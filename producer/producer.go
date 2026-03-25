@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/amir-yaghoubi/mqttpattern"
 	"github.com/tsarna/go2cty2go"
@@ -70,6 +71,7 @@ type KafkaProducer struct {
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
 	logger           *zap.Logger
+	metrics          *ProducerMetrics
 }
 
 // OnEvent implements bus.Subscriber. It maps the vinculum topic to a Kafka
@@ -103,16 +105,24 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 
 	switch p.produceMode {
 	case ProduceModeSync:
+		start := time.Now()
 		results := p.client.ProduceSync(ctx, record)
+		elapsed := time.Since(start)
 		if err := results.FirstErr(); err != nil {
+			p.metrics.RecordError(ctx, kafkaTopic)
 			return fmt.Errorf("kafka producer: produce: %w", err)
 		}
+		p.metrics.RecordSent(ctx, kafkaTopic)
+		p.metrics.RecordProduceDuration(ctx, kafkaTopic, elapsed)
 	case ProduceModeAsync:
 		p.client.Produce(ctx, record, func(r *kgo.Record, err error) {
 			if err != nil {
 				p.logger.Error("kafka async produce error",
 					zap.String("topic", r.Topic),
 					zap.Error(err))
+				p.metrics.RecordError(ctx, r.Topic)
+			} else {
+				p.metrics.RecordSent(ctx, r.Topic)
 			}
 		})
 	}

@@ -5,20 +5,22 @@ import (
 	"fmt"
 
 	bus "github.com/tsarna/vinculum-bus"
+	"github.com/tsarna/vinculum-bus/o11y"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
 
 // ConsumerBuilder constructs a KafkaConsumer with a fluent API.
 type ConsumerBuilder struct {
-	baseOpts      []kgo.Opt
-	groupID       string
-	startOffset   kgo.Offset
-	subscriptions []TopicSubscription
-	target        bus.Subscriber
-	commitMode    CommitMode
-	dlqTopic      string
-	logger        *zap.Logger
+	baseOpts        []kgo.Opt
+	groupID         string
+	startOffset     kgo.Offset
+	subscriptions   []TopicSubscription
+	target          bus.Subscriber
+	commitMode      CommitMode
+	dlqTopic        string
+	logger          *zap.Logger
+	metricsProvider o11y.MetricsProvider
 }
 
 // NewConsumer returns a ConsumerBuilder with default settings:
@@ -77,6 +79,13 @@ func (b *ConsumerBuilder) WithDLQTopic(topic string) *ConsumerBuilder {
 	return b
 }
 
+// WithMetricsProvider sets the metrics provider used to instrument the consumer.
+// If nil (the default), no metrics are collected.
+func (b *ConsumerBuilder) WithMetricsProvider(p o11y.MetricsProvider) *ConsumerBuilder {
+	b.metricsProvider = p
+	return b
+}
+
 // WithLogger sets the logger used for poll and processing errors.
 func (b *ConsumerBuilder) WithLogger(l *zap.Logger) *ConsumerBuilder {
 	if l != nil {
@@ -129,5 +138,6 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		commitMode:    b.commitMode,
 		dlqTopic:      b.dlqTopic,
 		logger:        b.logger,
+		metrics:       NewConsumerMetrics(b.metricsProvider),
 	}, nil
 }
