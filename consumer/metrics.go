@@ -60,7 +60,7 @@ func (m *ConsumerMetrics) UpdateLag(ctx context.Context, topic string, partition
 	)
 }
 
-// RecordProcessDuration records how long target.OnEvent took for topic.
+// RecordProcessDuration records how long subscriber.OnEvent took for topic.
 func (m *ConsumerMetrics) RecordProcessDuration(ctx context.Context, topic string, d time.Duration) {
 	if m == nil {
 		return

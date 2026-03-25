@@ -15,7 +15,7 @@ import (
 type CommitMode int
 
 const (
-	// CommitAfterProcess commits the offset after target.OnEvent returns
+	// CommitAfterProcess commits the offset after subscriber.OnEvent returns
 	// without error. This is the default. Provides at-least-once delivery.
 	CommitAfterProcess CommitMode = iota
 
@@ -42,13 +42,13 @@ type TopicSubscription struct {
 }
 
 // KafkaConsumer runs a poll loop that reads records from Kafka and publishes
-// them to a target bus.Subscriber. Create via NewConsumer().Build().
+// them to a bus.Subscriber. Create via NewConsumer().Build().
 //
 // KafkaConsumer is a source, not a sink — it does NOT implement bus.Subscriber.
 type KafkaConsumer struct {
 	client        *kgo.Client
 	subscriptions []TopicSubscription
-	target        bus.Subscriber
+	subscriber    bus.Subscriber
 	commitMode    CommitMode
 	dlqTopic      string // optional; if non-empty, failed records are produced here
 	logger        *zap.Logger
@@ -176,7 +176,7 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	}
 
 	start := time.Now()
-	err = c.target.OnEvent(ctx, vinculumTopic, msg, fields)
+	err = c.subscriber.OnEvent(ctx, vinculumTopic, msg, fields)
 	c.metrics.RecordProcessDuration(ctx, r.Topic, time.Since(start))
 	if err != nil {
 		c.metrics.RecordError(ctx, r.Topic)

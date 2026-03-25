@@ -41,7 +41,7 @@ func (s *captureSubscriber) OnEvent(_ context.Context, topic string, msg any, fi
 func makeConsumer(subs []TopicSubscription, target bus.Subscriber) *KafkaConsumer {
 	return &KafkaConsumer{
 		subscriptions: subs,
-		target:        target,
+		subscriber:    target,
 		commitMode:    CommitAfterProcess,
 		logger:        zap.NewNop(),
 	}

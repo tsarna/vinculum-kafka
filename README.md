@@ -129,7 +129,7 @@ client "kafka" "events" {
 
   consumer "main" {
     group_id = "my-app"
-    target   = bus.main
+    subscriber = bus.main
 
     topic_subscription {
       kafka_topic    = "sensor.readings"

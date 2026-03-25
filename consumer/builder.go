@@ -16,7 +16,7 @@ type ConsumerBuilder struct {
 	groupID         string
 	startOffset     kgo.Offset
 	subscriptions   []TopicSubscription
-	target          bus.Subscriber
+	subscriber      bus.Subscriber
 	commitMode      CommitMode
 	dlqTopic        string
 	logger          *zap.Logger
@@ -60,9 +60,9 @@ func (b *ConsumerBuilder) WithSubscription(sub TopicSubscription) *ConsumerBuild
 	return b
 }
 
-// WithTarget sets the subscriber that receives deserialized messages (required).
-func (b *ConsumerBuilder) WithTarget(t bus.Subscriber) *ConsumerBuilder {
-	b.target = t
+// WithSubscriber sets the subscriber that receives deserialized messages (required).
+func (b *ConsumerBuilder) WithSubscriber(t bus.Subscriber) *ConsumerBuilder {
+	b.subscriber = t
 	return b
 }
 
@@ -100,8 +100,8 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 	if b.groupID == "" {
 		return nil, errors.New("kafka consumer: group_id is required")
 	}
-	if b.target == nil {
-		return nil, errors.New("kafka consumer: target subscriber is required")
+	if b.subscriber == nil {
+		return nil, errors.New("kafka consumer: subscriber is required")
 	}
 	if len(b.subscriptions) == 0 {
 		return nil, errors.New("kafka consumer: at least one topic_subscription is required")
@@ -134,7 +134,7 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 	return &KafkaConsumer{
 		client:        client,
 		subscriptions: b.subscriptions,
-		target:        b.target,
+		subscriber:    b.subscriber,
 		commitMode:    b.commitMode,
 		dlqTopic:      b.dlqTopic,
 		logger:        b.logger,
