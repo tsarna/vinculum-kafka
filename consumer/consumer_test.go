@@ -12,6 +12,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// dlqHeaderMap extracts named headers from a kgo.Record into a map.
+func dlqHeaderMap(r *kgo.Record) map[string]string {
+	m := make(map[string]string, len(r.Headers))
+	for _, h := range r.Headers {
+		m[h.Key] = string(h.Value)
+	}
+	return m
+}
+
 // captureSubscriber records the arguments passed to OnEvent.
 type captureSubscriber struct {
 	bus.BaseSubscriber
@@ -187,6 +196,45 @@ func TestProcessRecord_NoKeyNoHeaders(t *testing.T) {
 	assert.Equal(t, "a/b", target.topic)
 	assert.Equal(t, "hello", target.msg)
 	assert.Nil(t, target.fields)
+}
+
+// ── DLQ record construction ───────────────────────────────────────────────────
+
+func TestBuildDLQRecord_HeadersAndMetadata(t *testing.T) {
+	c := &KafkaConsumer{dlqTopic: "my.dlq", logger: zap.NewNop()}
+	original := &kgo.Record{
+		Topic: "source.topic",
+		Key:   []byte("k1"),
+		Value: []byte(`{"x":1}`),
+		Headers: []kgo.RecordHeader{
+			{Key: "region", Value: []byte("us-east")},
+		},
+	}
+	procErr := errors.New("downstream failed")
+
+	dlq := c.buildDLQRecord(original, procErr)
+
+	assert.Equal(t, "my.dlq", dlq.Topic)
+	assert.Equal(t, original.Key, dlq.Key)
+	assert.Equal(t, original.Value, dlq.Value)
+
+	hm := dlqHeaderMap(dlq)
+	assert.Equal(t, "us-east", hm["region"])
+	assert.Equal(t, "downstream failed", hm["vinculum-error"])
+	assert.Equal(t, "source.topic", hm["vinculum-original-topic"])
+	assert.NotEmpty(t, hm["vinculum-timestamp"])
+}
+
+func TestBuildDLQRecord_NoOriginalHeaders(t *testing.T) {
+	c := &KafkaConsumer{dlqTopic: "dlq", logger: zap.NewNop()}
+	original := &kgo.Record{Topic: "t", Value: []byte(`{}`)}
+
+	dlq := c.buildDLQRecord(original, errors.New("oops"))
+	hm := dlqHeaderMap(dlq)
+	assert.Equal(t, "oops", hm["vinculum-error"])
+	assert.Equal(t, "t", hm["vinculum-original-topic"])
+	assert.NotEmpty(t, hm["vinculum-timestamp"])
+	assert.Len(t, dlq.Headers, 3) // only the 3 metadata headers
 }
 
 func TestProcessRecord_NilKeyIsNilPointer(t *testing.T) {

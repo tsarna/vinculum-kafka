@@ -17,6 +17,7 @@ type ConsumerBuilder struct {
 	subscriptions []TopicSubscription
 	target        bus.Subscriber
 	commitMode    CommitMode
+	dlqTopic      string
 	logger        *zap.Logger
 }
 
@@ -66,6 +67,13 @@ func (b *ConsumerBuilder) WithTarget(t bus.Subscriber) *ConsumerBuilder {
 // WithCommitMode sets the offset commit strategy.
 func (b *ConsumerBuilder) WithCommitMode(m CommitMode) *ConsumerBuilder {
 	b.commitMode = m
+	return b
+}
+
+// WithDLQTopic sets the Kafka topic to which failed records are forwarded.
+// If empty (default), failed records are logged and skipped without committing.
+func (b *ConsumerBuilder) WithDLQTopic(topic string) *ConsumerBuilder {
+	b.dlqTopic = topic
 	return b
 }
 
@@ -119,6 +127,7 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		subscriptions: b.subscriptions,
 		target:        b.target,
 		commitMode:    b.commitMode,
+		dlqTopic:      b.dlqTopic,
 		logger:        b.logger,
 	}, nil
 }

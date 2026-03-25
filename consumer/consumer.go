@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	bus "github.com/tsarna/vinculum-bus"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -49,6 +50,7 @@ type KafkaConsumer struct {
 	subscriptions []TopicSubscription
 	target        bus.Subscriber
 	commitMode    CommitMode
+	dlqTopic      string // optional; if non-empty, failed records are produced here
 	logger        *zap.Logger
 
 	cancel context.CancelFunc
@@ -102,7 +104,17 @@ func (c *KafkaConsumer) pollLoop(ctx context.Context) {
 				c.logger.Error("kafka consumer: process record failed",
 					zap.String("topic", r.Topic),
 					zap.Error(err))
-				return
+				if c.dlqTopic != "" {
+					if dlqErr := c.sendToDLQ(ctx, r, err); dlqErr != nil {
+						c.logger.Error("kafka consumer: DLQ send failed",
+							zap.String("topic", r.Topic),
+							zap.Error(dlqErr))
+						return // don't commit — DLQ itself failed
+					}
+					// DLQ send succeeded — fall through to commit
+				} else {
+					return // no DLQ; skip commit
+				}
 			}
 			if c.commitMode == CommitAfterProcess {
 				toCommit = append(toCommit, r)
@@ -141,6 +153,30 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	}
 
 	return c.target.OnEvent(ctx, vinculumTopic, msg, fields)
+}
+
+func (c *KafkaConsumer) sendToDLQ(ctx context.Context, r *kgo.Record, procErr error) error {
+	return c.client.ProduceSync(ctx, c.buildDLQRecord(r, procErr)).FirstErr()
+}
+
+// buildDLQRecord constructs the record to be produced to the DLQ topic.
+// Kept separate from sendToDLQ so the record structure can be tested without a kgo.Client.
+func (c *KafkaConsumer) buildDLQRecord(r *kgo.Record, procErr error) *kgo.Record {
+	extra := []kgo.RecordHeader{
+		{Key: "vinculum-error", Value: []byte(procErr.Error())},
+		{Key: "vinculum-original-topic", Value: []byte(r.Topic)},
+		{Key: "vinculum-timestamp", Value: []byte(time.Now().UTC().Format(time.RFC3339))},
+	}
+	headers := make([]kgo.RecordHeader, 0, len(r.Headers)+len(extra))
+	headers = append(headers, r.Headers...)
+	headers = append(headers, extra...)
+
+	return &kgo.Record{
+		Topic:   c.dlqTopic,
+		Key:     r.Key,
+		Value:   r.Value,
+		Headers: headers,
+	}
 }
 
 func (c *KafkaConsumer) findSubscription(kafkaTopic string) (*TopicSubscription, error) {
