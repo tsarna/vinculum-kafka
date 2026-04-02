@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-02
+
 ### Added
 
 - **Distributed tracing via Kotel** — bidirectional W3C TraceContext propagation over Kafka record headers using the official `kotel` plugin (`github.com/twmb/franz-go/plugin/kotel`). When a `trace.TracerProvider` is configured on the `KafkaClient`, kotel attaches to both the producer and consumer `kgo.Client` instances as a hook:
