@@ -8,6 +8,8 @@ import (
 
 	bus "github.com/tsarna/vinculum-bus"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 )
 
@@ -175,10 +177,26 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 		return fmt.Errorf("kafka consumer: resolve vinculum topic for %q: %w", r.Topic, err)
 	}
 
+	// Use the record context as the parent — kotel has already extracted the
+	// remote trace context from the record headers and stored a child span in
+	// r.Context. Fall back to the poll context if r.Context is nil.
+	recCtx := r.Context
+	if recCtx == nil {
+		recCtx = ctx
+	}
+
+	// Create a span covering the full vinculum processing time (topic resolution,
+	// deserialization, and subscriber.OnEvent including action evaluation).
+	tracer := otel.GetTracerProvider().Tracer("vinculum-kafka/consumer")
+	recCtx, span := tracer.Start(recCtx, "vinculum.process "+vinculumTopic)
+	defer span.End()
+
 	start := time.Now()
-	err = c.subscriber.OnEvent(ctx, vinculumTopic, msg, fields)
+	err = c.subscriber.OnEvent(recCtx, vinculumTopic, msg, fields)
 	c.metrics.RecordProcessDuration(ctx, r.Topic, time.Since(start))
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		c.metrics.RecordError(ctx, r.Topic)
 		return err
 	}
@@ -233,15 +251,30 @@ func deserializePayload(value []byte) any {
 	return v
 }
 
-// headersToFields converts Kafka record headers to a string map.
-// Returns nil (not an empty map) when there are no headers.
+// traceHeaders is the set of W3C trace context header keys injected by kotel.
+// These are filtered from the fields map to keep business metadata clean.
+var traceHeaders = map[string]struct{}{
+	"traceparent": {},
+	"tracestate":  {},
+	"baggage":     {},
+}
+
+// headersToFields converts Kafka record headers to a string map, filtering out
+// W3C trace context headers (traceparent, tracestate, baggage) since those are
+// extracted into the Go context by kotel and should not appear as business fields.
+// Returns nil (not an empty map) when there are no non-trace headers.
 func headersToFields(headers []kgo.RecordHeader) map[string]string {
 	if len(headers) == 0 {
 		return nil
 	}
 	m := make(map[string]string, len(headers))
 	for _, h := range headers {
-		m[h.Key] = string(h.Value)
+		if _, isTrace := traceHeaders[h.Key]; !isTrace {
+			m[h.Key] = string(h.Value)
+		}
+	}
+	if len(m) == 0 {
+		return nil
 	}
 	return m
 }

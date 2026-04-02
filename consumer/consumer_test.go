@@ -9,6 +9,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
@@ -101,6 +105,100 @@ func TestHeadersToFields_Multiple(t *testing.T) {
 	}
 	result := headersToFields(headers)
 	assert.Equal(t, map[string]string{"k1": "v1", "k2": "v2"}, result)
+}
+
+func TestHeadersToFields_FiltersTraceHeaders(t *testing.T) {
+	headers := []kgo.RecordHeader{
+		{Key: "region", Value: []byte("eu-west")},
+		{Key: "traceparent", Value: []byte("00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01")},
+		{Key: "tracestate", Value: []byte("vendor=abc")},
+		{Key: "baggage", Value: []byte("userId=42")},
+	}
+	result := headersToFields(headers)
+	assert.Equal(t, map[string]string{"region": "eu-west"}, result,
+		"trace headers should be filtered, business headers should remain")
+}
+
+func TestHeadersToFields_OnlyTraceHeaders(t *testing.T) {
+	headers := []kgo.RecordHeader{
+		{Key: "traceparent", Value: []byte("00-abc-def-01")},
+		{Key: "tracestate", Value: []byte("k=v")},
+	}
+	assert.Nil(t, headersToFields(headers),
+		"should return nil when only trace headers are present")
+}
+
+// ── processRecord tracing ─────────────────────────────────────────────────────
+
+func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	t.Cleanup(func() {
+		tp.Shutdown(context.Background()) //nolint:errcheck
+		otel.SetTracerProvider(otel.GetTracerProvider())
+	})
+	return exporter
+}
+
+func TestProcessRecord_CreatesVinculumSpan(t *testing.T) {
+	exporter := setupTestTracer(t)
+
+	target := &captureSubscriber{}
+	c := makeConsumer([]TopicSubscription{
+		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("a/b")},
+	}, target)
+
+	err := c.processRecord(context.Background(), &kgo.Record{Topic: "foo", Value: []byte(`{}`)})
+	require.NoError(t, err)
+
+	spans := exporter.GetSpans()
+	require.NotEmpty(t, spans)
+	assert.Equal(t, "vinculum.process a/b", spans[0].Name)
+}
+
+func TestProcessRecord_PropagatesRemoteTraceContext(t *testing.T) {
+	exporter := setupTestTracer(t)
+
+	target := &captureSubscriber{}
+	c := makeConsumer([]TopicSubscription{
+		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("a/b")},
+	}, target)
+
+	// Simulate kotel having already extracted the remote trace context into r.Context.
+	remoteTraceID := "80e1afed08e019fc1110464cfa66635c"
+	carrier := propagation.MapCarrier{"traceparent": "00-" + remoteTraceID + "-7a085853722dc6d2-01"}
+	rCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+
+	r := &kgo.Record{Topic: "foo", Value: []byte(`{}`), Context: rCtx}
+	err := c.processRecord(context.Background(), r)
+	require.NoError(t, err)
+
+	spans := exporter.GetSpans()
+	require.NotEmpty(t, spans)
+	assert.Equal(t, remoteTraceID, spans[0].SpanContext.TraceID().String(),
+		"vinculum processing span should be a child of the remote trace")
+}
+
+func TestProcessRecord_SpanRecordsError(t *testing.T) {
+	exporter := setupTestTracer(t)
+
+	target := &captureSubscriber{err: errors.New("downstream failure")}
+	c := makeConsumer([]TopicSubscription{
+		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("a/b")},
+	}, target)
+
+	err := c.processRecord(context.Background(), &kgo.Record{Topic: "foo", Value: []byte(`{}`)})
+	assert.Error(t, err)
+
+	spans := exporter.GetSpans()
+	require.NotEmpty(t, spans)
+	assert.Len(t, spans[0].Events, 1, "expected one error event on the span")
 }
 
 // ── findSubscription ──────────────────────────────────────────────────────────

@@ -101,6 +101,9 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 		Key:     key,
 		Value:   value,
 		Headers: headers,
+		// kotel reads r.Context to find the parent span and inject traceparent
+		// into the record headers. Without this, outgoing traces are lost.
+		Context: ctx,
 	}
 
 	switch p.produceMode {
