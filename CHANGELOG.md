@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-03
+
+### Changed
+
+- **OTel span links for Kafka consumer traces** — the kotel tracer is now configured with `kotel.LinkSpans()`, following the [OTel messaging semantic conventions](https://opentelemetry.io/docs/specs/otel/trace/semantic_conventions/messaging/) recommendation for pub/sub systems. Consumer spans are now new trace roots linked to the producer span rather than children of it, correctly representing the asynchronous boundary.
+
 ## [0.6.0] - 2026-04-02
 
 ### Added

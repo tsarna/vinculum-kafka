@@ -178,8 +178,11 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	}
 
 	// Use the record context as the parent — kotel has already extracted the
-	// remote trace context from the record headers and stored a child span in
-	// r.Context. Fall back to the poll context if r.Context is nil.
+	// remote trace context from the record headers, created a new root span
+	// linked to the producer span, and stored it in r.Context. This makes the
+	// vinculum processing span a child of that new root (i.e. a separate trace
+	// from the producer, linked rather than parented). Fall back to the poll
+	// context if r.Context is nil.
 	recCtx := r.Context
 	if recCtx == nil {
 		recCtx = ctx

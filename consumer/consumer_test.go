@@ -162,7 +162,7 @@ func TestProcessRecord_CreatesVinculumSpan(t *testing.T) {
 	assert.Equal(t, "vinculum.process a/b", spans[0].Name)
 }
 
-func TestProcessRecord_PropagatesRemoteTraceContext(t *testing.T) {
+func TestProcessRecord_UsesRecordContextAsParent(t *testing.T) {
 	exporter := setupTestTracer(t)
 
 	target := &captureSubscriber{}
@@ -170,10 +170,14 @@ func TestProcessRecord_PropagatesRemoteTraceContext(t *testing.T) {
 		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("a/b")},
 	}, target)
 
-	// Simulate kotel having already extracted the remote trace context into r.Context.
-	remoteTraceID := "80e1afed08e019fc1110464cfa66635c"
-	carrier := propagation.MapCarrier{"traceparent": "00-" + remoteTraceID + "-7a085853722dc6d2-01"}
-	rCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+	// Simulate what kotel does with LinkSpans enabled: it creates a new root
+	// span (linked to the producer span) and stores it in r.Context. The
+	// vinculum.process span should become a child of that new root span, NOT
+	// of the original remote trace.
+	tp := otel.GetTracerProvider()
+	rCtx, rootSpan := tp.Tracer("test").Start(context.Background(), "kotel.receive")
+	rootTraceID := rootSpan.SpanContext().TraceID()
+	rootSpan.End()
 
 	r := &kgo.Record{Topic: "foo", Value: []byte(`{}`), Context: rCtx}
 	err := c.processRecord(context.Background(), r)
@@ -181,8 +185,8 @@ func TestProcessRecord_PropagatesRemoteTraceContext(t *testing.T) {
 
 	spans := exporter.GetSpans()
 	require.NotEmpty(t, spans)
-	assert.Equal(t, remoteTraceID, spans[0].SpanContext.TraceID().String(),
-		"vinculum processing span should be a child of the remote trace")
+	assert.Equal(t, rootTraceID, spans[0].SpanContext.TraceID(),
+		"vinculum processing span should be a child of the span in r.Context")
 }
 
 func TestProcessRecord_SpanRecordsError(t *testing.T) {
