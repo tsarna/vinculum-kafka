@@ -9,7 +9,7 @@ require (
 	github.com/tsarna/vinculum-bus v0.9.2
 	github.com/twmb/franz-go v1.18.1
 	github.com/zclconf/go-cty v1.18.0
-	go.opentelemetry.io/otel v1.42.0
+	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/sdk v1.34.0
 	go.uber.org/zap v1.27.1
 )
