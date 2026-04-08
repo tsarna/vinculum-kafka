@@ -5,32 +5,61 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tsarna/vinculum-bus/o11y"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
-// ConsumerMetrics holds the o11y instruments for a KafkaConsumer.
+// ConsumerMetrics holds the OTel instruments for a KafkaConsumer.
 // A nil *ConsumerMetrics is valid and results in no-op recording.
 type ConsumerMetrics struct {
-	recordsReceived o11y.Counter   // kafka_consumer_records_received_total (label: topic)
-	errors          o11y.Counter   // kafka_consumer_errors_total            (label: topic)
-	lag             o11y.Gauge     // kafka_consumer_lag                     (labels: topic, partition)
-	processDuration o11y.Histogram // kafka_consumer_process_duration_seconds (label: topic)
-	commits         o11y.Counter   // kafka_consumer_commits_total
+	recordsReceived metric.Int64Counter    // messaging.client.consumed.messages
+	errors          metric.Int64Counter    // kafka.consumer.errors
+	lag             metric.Float64Gauge    // kafka.consumer.lag
+	processDuration metric.Float64Histogram // messaging.process.duration
+	commits         metric.Int64Counter    // kafka.consumer.commits
 }
 
-// NewConsumerMetrics creates a ConsumerMetrics using the given provider.
-// Returns nil if provider is nil, which is safe to call all methods on.
-func NewConsumerMetrics(provider o11y.MetricsProvider) *ConsumerMetrics {
-	if provider == nil {
+// NewConsumerMetrics creates a ConsumerMetrics using the given Meter.
+// Returns nil if meter is nil, which is safe to call all methods on.
+func NewConsumerMetrics(meter metric.Meter) *ConsumerMetrics {
+	if meter == nil {
 		return nil
 	}
+	rr, _ := meter.Int64Counter("messaging.client.consumed.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Records consumed by the Kafka consumer"),
+	)
+	e, _ := meter.Int64Counter("kafka.consumer.errors",
+		metric.WithUnit("{error}"),
+		metric.WithDescription("Errors encountered during Kafka consumption"),
+	)
+	l, _ := meter.Float64Gauge("kafka.consumer.lag",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Consumer lag per topic/partition"),
+	)
+	pd, _ := meter.Float64Histogram("messaging.process.duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of message processing"),
+	)
+	c, _ := meter.Int64Counter("kafka.consumer.commits",
+		metric.WithUnit("{operation}"),
+		metric.WithDescription("Offset commits performed"),
+	)
 	return &ConsumerMetrics{
-		recordsReceived: provider.Counter("kafka_consumer_records_received_total"),
-		errors:          provider.Counter("kafka_consumer_errors_total"),
-		lag:             provider.Gauge("kafka_consumer_lag"),
-		processDuration: provider.Histogram("kafka_consumer_process_duration_seconds"),
-		commits:         provider.Counter("kafka_consumer_commits_total"),
+		recordsReceived: rr,
+		errors:          e,
+		lag:             l,
+		processDuration: pd,
+		commits:         c,
 	}
+}
+
+// topicAttr returns standard messaging attributes for a Kafka topic.
+func topicAttr(topic string) metric.MeasurementOption {
+	return metric.WithAttributes(
+		attribute.String("messaging.system", "kafka"),
+		attribute.String("messaging.destination.name", topic),
+	)
 }
 
 // RecordReceived increments the records-received counter for topic.
@@ -38,7 +67,7 @@ func (m *ConsumerMetrics) RecordReceived(ctx context.Context, topic string) {
 	if m == nil {
 		return
 	}
-	m.recordsReceived.Add(ctx, 1, o11y.Label{Key: "topic", Value: topic})
+	m.recordsReceived.Add(ctx, 1, topicAttr(topic))
 }
 
 // RecordError increments the error counter for topic.
@@ -46,7 +75,7 @@ func (m *ConsumerMetrics) RecordError(ctx context.Context, topic string) {
 	if m == nil {
 		return
 	}
-	m.errors.Add(ctx, 1, o11y.Label{Key: "topic", Value: topic})
+	m.errors.Add(ctx, 1, topicAttr(topic))
 }
 
 // UpdateLag sets the lag gauge for a topic/partition.
@@ -54,9 +83,9 @@ func (m *ConsumerMetrics) UpdateLag(ctx context.Context, topic string, partition
 	if m == nil {
 		return
 	}
-	m.lag.Set(ctx, float64(lag),
-		o11y.Label{Key: "topic", Value: topic},
-		o11y.Label{Key: "partition", Value: fmt.Sprintf("%d", partition)},
+	m.lag.Record(ctx, float64(lag),
+		topicAttr(topic),
+		metric.WithAttributes(attribute.String("messaging.destination.partition.id", fmt.Sprintf("%d", partition))),
 	)
 }
 
@@ -65,7 +94,7 @@ func (m *ConsumerMetrics) RecordProcessDuration(ctx context.Context, topic strin
 	if m == nil {
 		return
 	}
-	m.processDuration.Record(ctx, d.Seconds(), o11y.Label{Key: "topic", Value: topic})
+	m.processDuration.Record(ctx, d.Seconds(), topicAttr(topic))
 }
 
 // RecordCommit increments the commits counter.
@@ -73,5 +102,5 @@ func (m *ConsumerMetrics) RecordCommit(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	m.commits.Add(ctx, 1)
+	m.commits.Add(ctx, 1, metric.WithAttributes(attribute.String("messaging.system", "kafka")))
 }

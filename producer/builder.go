@@ -3,8 +3,8 @@ package producer
 import (
 	"errors"
 
-	"github.com/tsarna/vinculum-bus/o11y"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -15,7 +15,7 @@ type ProducerBuilder struct {
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
 	logger           *zap.Logger
-	metricsProvider  o11y.MetricsProvider
+	meterProvider    metric.MeterProvider
 }
 
 // NewProducer returns a ProducerBuilder with default settings:
@@ -53,10 +53,10 @@ func (b *ProducerBuilder) WithProduceMode(m ProduceMode) *ProducerBuilder {
 	return b
 }
 
-// WithMetricsProvider sets the metrics provider used to instrument the producer.
+// WithMeterProvider sets the OTel MeterProvider used to instrument the producer.
 // If nil (the default), no metrics are collected.
-func (b *ProducerBuilder) WithMetricsProvider(p o11y.MetricsProvider) *ProducerBuilder {
-	b.metricsProvider = p
+func (b *ProducerBuilder) WithMeterProvider(p metric.MeterProvider) *ProducerBuilder {
+	b.meterProvider = p
 	return b
 }
 
@@ -73,12 +73,16 @@ func (b *ProducerBuilder) Build() (*KafkaProducer, error) {
 	if b.client == nil {
 		return nil, errors.New("kafka producer: franz-go client is required")
 	}
+	var meter metric.Meter
+	if b.meterProvider != nil {
+		meter = b.meterProvider.Meter("github.com/tsarna/vinculum-kafka/producer")
+	}
 	return &KafkaProducer{
 		client:           b.client,
 		topicMappings:    b.topicMappings,
 		defaultTransform: b.defaultTransform,
 		produceMode:      b.produceMode,
 		logger:           b.logger,
-		metrics:          NewProducerMetrics(b.metricsProvider),
+		metrics:          NewProducerMetrics(meter),
 	}, nil
 }

@@ -5,22 +5,22 @@ import (
 	"fmt"
 
 	bus "github.com/tsarna/vinculum-bus"
-	"github.com/tsarna/vinculum-bus/o11y"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
 // ConsumerBuilder constructs a KafkaConsumer with a fluent API.
 type ConsumerBuilder struct {
-	baseOpts        []kgo.Opt
-	groupID         string
-	startOffset     kgo.Offset
-	subscriptions   []TopicSubscription
-	subscriber      bus.Subscriber
-	commitMode      CommitMode
-	dlqTopic        string
-	logger          *zap.Logger
-	metricsProvider o11y.MetricsProvider
+	baseOpts      []kgo.Opt
+	groupID       string
+	startOffset   kgo.Offset
+	subscriptions []TopicSubscription
+	subscriber    bus.Subscriber
+	commitMode    CommitMode
+	dlqTopic      string
+	logger        *zap.Logger
+	meterProvider metric.MeterProvider
 }
 
 // NewConsumer returns a ConsumerBuilder with default settings:
@@ -79,10 +79,10 @@ func (b *ConsumerBuilder) WithDLQTopic(topic string) *ConsumerBuilder {
 	return b
 }
 
-// WithMetricsProvider sets the metrics provider used to instrument the consumer.
+// WithMeterProvider sets the OTel MeterProvider used to instrument the consumer.
 // If nil (the default), no metrics are collected.
-func (b *ConsumerBuilder) WithMetricsProvider(p o11y.MetricsProvider) *ConsumerBuilder {
-	b.metricsProvider = p
+func (b *ConsumerBuilder) WithMeterProvider(p metric.MeterProvider) *ConsumerBuilder {
+	b.meterProvider = p
 	return b
 }
 
@@ -131,6 +131,11 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		return nil, fmt.Errorf("kafka consumer %q: create client: %w", b.groupID, err)
 	}
 
+	var meter metric.Meter
+	if b.meterProvider != nil {
+		meter = b.meterProvider.Meter("github.com/tsarna/vinculum-kafka/consumer")
+	}
+
 	return &KafkaConsumer{
 		client:        client,
 		subscriptions: b.subscriptions,
@@ -138,6 +143,6 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		commitMode:    b.commitMode,
 		dlqTopic:      b.dlqTopic,
 		logger:        b.logger,
-		metrics:       NewConsumerMetrics(b.metricsProvider),
+		metrics:       NewConsumerMetrics(meter),
 	}, nil
 }

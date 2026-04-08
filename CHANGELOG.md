@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-08
+
+### Changed
+
+- **OTel metrics replaces o11y.MetricsProvider abstraction** — producer and consumer now accept `metric.MeterProvider` directly via `WithMeterProvider()` (replacing `WithMetricsProvider(o11y.MetricsProvider)`). Metric names follow OTel semantic conventions: `messaging.client.sent.messages`, `messaging.client.consumed.messages`, `messaging.client.operation.duration`, `messaging.process.duration` where applicable; `kafka.producer.errors`, `kafka.consumer.errors`, `kafka.consumer.lag`, `kafka.consumer.commits` for Kafka-specific metrics. All metrics carry `messaging.system=kafka` and `messaging.destination.name` attributes. Requires vinculum-bus v0.11.0.
+
 ## [0.7.0] - 2026-04-03
 
 ### Changed
