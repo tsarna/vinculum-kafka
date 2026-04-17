@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-17
+
 ### Added
 
 - **Pluggable wire format support** — producer and consumer builders now accept `WithWireFormat(wire.WireFormat)` or `WithWireFormatName(name)` to control payload serialization/deserialization. Built-in formats: `auto` (default), `json`, `string`, `bytes`. The default `auto` preserves backward compatibility. Depends on `github.com/tsarna/vinculum-wire` v0.1.0.
@@ -17,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Inline `serializePayload` / `deserializePayload` functions** — replaced by the shared `vinculum-wire` module. The cty-to-native-Go conversion shim remains inline until `CtyWireFormat` is wired through vinculum's config layer.
+- **Inline `serializePayload` / `deserializePayload` functions** — replaced by the shared `vinculum-wire` module.
+- **`go2cty2go` and `go-cty` dependencies** — cty conversion now handled by vinculum's `CtyWireFormat` decorator at the config layer.
 
 ## [0.8.0] - 2026-04-08
 

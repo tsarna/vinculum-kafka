@@ -7,11 +7,9 @@ import (
 	"time"
 
 	"github.com/amir-yaghoubi/mqttpattern"
-	"github.com/tsarna/go2cty2go"
 	bus "github.com/tsarna/vinculum-bus"
 	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/zclconf/go-cty/cty"
 	"go.uber.org/zap"
 )
 
@@ -85,17 +83,6 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 	}
 	if kafkaTopic == "" {
 		return nil // DefaultTopicIgnore — no match, silently skip
-	}
-
-	// Convert cty.Value to native Go before wire-format serialization.
-	// This shim will be removed once CtyWireFormat handles it at the
-	// vinculum config layer.
-	if val, ok := msg.(cty.Value); ok {
-		native, err := go2cty2go.CtyToAny(val)
-		if err != nil {
-			return fmt.Errorf("kafka producer: cty conversion: %w", err)
-		}
-		msg = native
 	}
 
 	value, err := p.wireFormat.Serialize(msg)

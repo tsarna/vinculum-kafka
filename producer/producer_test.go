@@ -4,9 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tsarna/go2cty2go"
 	wire "github.com/tsarna/vinculum-wire"
-	"github.com/zclconf/go-cty/cty"
 )
 
 // makeProducer builds a KafkaProducer without a kgo.Client for unit-testing
@@ -196,19 +194,7 @@ func TestResolveTopicAndKey_NoMappingsIgnore(t *testing.T) {
 	}
 }
 
-// --- serialize (via wire format + cty shim) ---
-
-// serializeWithCtyShim mimics the OnEvent cty conversion + wire format path.
-func serializeWithCtyShim(wf wire.WireFormat, msg any) ([]byte, error) {
-	if val, ok := msg.(cty.Value); ok {
-		native, err := go2cty2go.CtyToAny(val)
-		if err != nil {
-			return nil, err
-		}
-		msg = native
-	}
-	return wf.Serialize(msg)
-}
+// --- serialize (via wire format) ---
 
 func TestSerialize_Nil(t *testing.T) {
 	b, err := wire.Auto.Serialize(nil)
@@ -238,49 +224,5 @@ func TestSerialize_GoValue(t *testing.T) {
 	}
 	if string(b) != `{"hello":"world"}` {
 		t.Errorf("got %q, want %q", b, `{"hello":"world"}`)
-	}
-}
-
-func TestSerialize_CtyString(t *testing.T) {
-	b, err := serializeWithCtyShim(wire.Auto, cty.StringVal("hello"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// auto format passes strings through verbatim (not JSON-encoded)
-	if string(b) != `hello` {
-		t.Errorf("got %q, want %q", b, `hello`)
-	}
-}
-
-func TestSerialize_CtyStringJSON(t *testing.T) {
-	b, err := serializeWithCtyShim(wire.JSON, cty.StringVal("hello"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(b) != `"hello"` {
-		t.Errorf("got %q, want %q", b, `"hello"`)
-	}
-}
-
-func TestSerialize_CtyObject(t *testing.T) {
-	val := cty.ObjectVal(map[string]cty.Value{
-		"count": cty.NumberIntVal(42),
-	})
-	b, err := serializeWithCtyShim(wire.Auto, val)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(b) != `{"count":42}` {
-		t.Errorf("got %q, want %q", b, `{"count":42}`)
-	}
-}
-
-func TestSerialize_CtyNumber(t *testing.T) {
-	b, err := serializeWithCtyShim(wire.Auto, cty.NumberIntVal(99))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(b) != `99` {
-		t.Errorf("got %q, want %q", b, `99`)
 	}
 }
