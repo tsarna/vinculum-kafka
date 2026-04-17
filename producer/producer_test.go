@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tsarna/go2cty2go"
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -194,10 +196,22 @@ func TestResolveTopicAndKey_NoMappingsIgnore(t *testing.T) {
 	}
 }
 
-// --- serializePayload ---
+// --- serialize (via wire format + cty shim) ---
 
-func TestSerializePayload_Nil(t *testing.T) {
-	b, err := serializePayload(nil)
+// serializeWithCtyShim mimics the OnEvent cty conversion + wire format path.
+func serializeWithCtyShim(wf wire.WireFormat, msg any) ([]byte, error) {
+	if val, ok := msg.(cty.Value); ok {
+		native, err := go2cty2go.CtyToAny(val)
+		if err != nil {
+			return nil, err
+		}
+		msg = native
+	}
+	return wf.Serialize(msg)
+}
+
+func TestSerialize_Nil(t *testing.T) {
+	b, err := wire.Auto.Serialize(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,9 +220,9 @@ func TestSerializePayload_Nil(t *testing.T) {
 	}
 }
 
-func TestSerializePayload_BytesPassthrough(t *testing.T) {
+func TestSerialize_BytesPassthrough(t *testing.T) {
 	raw := []byte(`{"already":"encoded"}`)
-	b, err := serializePayload(raw)
+	b, err := wire.Auto.Serialize(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,8 +231,8 @@ func TestSerializePayload_BytesPassthrough(t *testing.T) {
 	}
 }
 
-func TestSerializePayload_GoValue(t *testing.T) {
-	b, err := serializePayload(map[string]any{"hello": "world"})
+func TestSerialize_GoValue(t *testing.T) {
+	b, err := wire.Auto.Serialize(map[string]any{"hello": "world"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,8 +241,19 @@ func TestSerializePayload_GoValue(t *testing.T) {
 	}
 }
 
-func TestSerializePayload_CtyString(t *testing.T) {
-	b, err := serializePayload(cty.StringVal("hello"))
+func TestSerialize_CtyString(t *testing.T) {
+	b, err := serializeWithCtyShim(wire.Auto, cty.StringVal("hello"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// auto format passes strings through verbatim (not JSON-encoded)
+	if string(b) != `hello` {
+		t.Errorf("got %q, want %q", b, `hello`)
+	}
+}
+
+func TestSerialize_CtyStringJSON(t *testing.T) {
+	b, err := serializeWithCtyShim(wire.JSON, cty.StringVal("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,11 +262,11 @@ func TestSerializePayload_CtyString(t *testing.T) {
 	}
 }
 
-func TestSerializePayload_CtyObject(t *testing.T) {
+func TestSerialize_CtyObject(t *testing.T) {
 	val := cty.ObjectVal(map[string]cty.Value{
 		"count": cty.NumberIntVal(42),
 	})
-	b, err := serializePayload(val)
+	b, err := serializeWithCtyShim(wire.Auto, val)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,8 +275,8 @@ func TestSerializePayload_CtyObject(t *testing.T) {
 	}
 }
 
-func TestSerializePayload_CtyNumber(t *testing.T) {
-	b, err := serializePayload(cty.NumberIntVal(99))
+func TestSerialize_CtyNumber(t *testing.T) {
+	b, err := serializeWithCtyShim(wire.Auto, cty.NumberIntVal(99))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -2,11 +2,11 @@ package consumer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	bus "github.com/tsarna/vinculum-bus"
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -53,6 +53,7 @@ type KafkaConsumer struct {
 	subscriber    bus.Subscriber
 	commitMode    CommitMode
 	dlqTopic      string // optional; if non-empty, failed records are produced here
+	wireFormat    wire.WireFormat
 	logger        *zap.Logger
 	metrics       *ConsumerMetrics
 
@@ -163,7 +164,17 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 		s := string(r.Key)
 		key = &s
 	}
-	msg := deserializePayload(r.Value)
+	var msg any
+	if r.Value != nil {
+		var deserErr error
+		msg, deserErr = c.wireFormat.Deserialize(r.Value)
+		if deserErr != nil {
+			c.logger.Warn("kafka consumer: deserialize failed, passing raw bytes",
+				zap.String("topic", r.Topic),
+				zap.Error(deserErr))
+			msg = r.Value
+		}
+	}
 
 	sub, err := c.findSubscription(r.Topic)
 	if err != nil {
@@ -238,20 +249,6 @@ func (c *KafkaConsumer) findSubscription(kafkaTopic string) (*TopicSubscription,
 		}
 	}
 	return nil, fmt.Errorf("kafka consumer: no subscription found for topic %q", kafkaTopic)
-}
-
-// deserializePayload converts a Kafka record value to a Go value.
-// Valid JSON is unmarshalled to any (map/slice/scalar).
-// Invalid JSON is returned as []byte.
-func deserializePayload(value []byte) any {
-	if value == nil {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal(value, &v); err != nil {
-		return value
-	}
-	return v
 }
 
 // traceHeaders is the set of W3C trace context header keys injected by kotel.

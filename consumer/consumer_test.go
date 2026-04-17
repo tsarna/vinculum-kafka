@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	bus "github.com/tsarna/vinculum-bus"
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,7 @@ func makeConsumer(subs []TopicSubscription, target bus.Subscriber) *KafkaConsume
 		subscriptions: subs,
 		subscriber:    target,
 		commitMode:    CommitAfterProcess,
+		wireFormat:    wire.Auto,
 		logger:        zap.NewNop(),
 	}
 }
@@ -58,37 +60,42 @@ func staticTopicFunc(topic string) VinculumTopicFunc {
 	}
 }
 
-// ── deserializePayload ────────────────────────────────────────────────────────
+// ── deserialize (via wire format) ─────────────────────────────────────────────
 
-func TestDeserializePayload_Nil(t *testing.T) {
-	assert.Nil(t, deserializePayload(nil))
+func TestDeserialize_Nil(t *testing.T) {
+	// nil payloads are handled before calling Deserialize in processRecord
+	result, err := wire.Auto.Deserialize([]byte{})
+	require.NoError(t, err)
+	assert.Equal(t, "", result)
 }
 
-func TestDeserializePayload_ValidJSONObject(t *testing.T) {
-	result := deserializePayload([]byte(`{"a":1}`))
+func TestDeserialize_ValidJSONObject(t *testing.T) {
+	result, err := wire.Auto.Deserialize([]byte(`{"a":1}`))
+	require.NoError(t, err)
 	m, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(1), m["a"])
 }
 
-func TestDeserializePayload_ValidJSONArray(t *testing.T) {
-	result := deserializePayload([]byte(`[1,2,3]`))
+func TestDeserialize_ValidJSONArray(t *testing.T) {
+	result, err := wire.Auto.Deserialize([]byte(`[1,2,3]`))
+	require.NoError(t, err)
 	arr, ok := result.([]any)
 	require.True(t, ok)
 	assert.Len(t, arr, 3)
 }
 
-func TestDeserializePayload_ValidJSONString(t *testing.T) {
-	result := deserializePayload([]byte(`"hello"`))
+func TestDeserialize_ValidJSONString(t *testing.T) {
+	result, err := wire.Auto.Deserialize([]byte(`"hello"`))
+	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 }
 
-func TestDeserializePayload_InvalidJSON(t *testing.T) {
-	raw := []byte("not-json")
-	result := deserializePayload(raw)
-	b, ok := result.([]byte)
-	require.True(t, ok)
-	assert.Equal(t, raw, b)
+func TestDeserialize_InvalidJSON(t *testing.T) {
+	result, err := wire.Auto.Deserialize([]byte("not-json"))
+	require.NoError(t, err)
+	// auto format falls back to string (not []byte) per spec
+	assert.Equal(t, "not-json", result)
 }
 
 // ── headersToFields ───────────────────────────────────────────────────────────

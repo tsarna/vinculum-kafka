@@ -2,7 +2,9 @@ package producer
 
 import (
 	"errors"
+	"fmt"
 
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
@@ -14,6 +16,7 @@ type ProducerBuilder struct {
 	topicMappings    []TopicMapping
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
+	wireFormat       wire.WireFormat
 	logger           *zap.Logger
 	meterProvider    metric.MeterProvider
 }
@@ -60,6 +63,19 @@ func (b *ProducerBuilder) WithMeterProvider(p metric.MeterProvider) *ProducerBui
 	return b
 }
 
+// WithWireFormat sets the wire format used to serialize outbound payloads.
+func (b *ProducerBuilder) WithWireFormat(f wire.WireFormat) *ProducerBuilder {
+	b.wireFormat = f
+	return b
+}
+
+// WithWireFormatName sets the wire format by name (e.g. "json", "auto").
+// Build returns an error if the name is not recognized.
+func (b *ProducerBuilder) WithWireFormatName(name string) *ProducerBuilder {
+	b.wireFormat = wire.ByName(name)
+	return b
+}
+
 // WithLogger sets the logger used for async produce errors.
 func (b *ProducerBuilder) WithLogger(l *zap.Logger) *ProducerBuilder {
 	if l != nil {
@@ -73,6 +89,13 @@ func (b *ProducerBuilder) Build() (*KafkaProducer, error) {
 	if b.client == nil {
 		return nil, errors.New("kafka producer: franz-go client is required")
 	}
+	wf := b.wireFormat
+	if wf == nil {
+		wf = wire.Auto
+	}
+	if wf.Name() == "" {
+		return nil, fmt.Errorf("kafka producer: unknown wire format name")
+	}
 	var meter metric.Meter
 	if b.meterProvider != nil {
 		meter = b.meterProvider.Meter("github.com/tsarna/vinculum-kafka/producer")
@@ -82,6 +105,7 @@ func (b *ProducerBuilder) Build() (*KafkaProducer, error) {
 		topicMappings:    b.topicMappings,
 		defaultTransform: b.defaultTransform,
 		produceMode:      b.produceMode,
+		wireFormat:       wf,
 		logger:           b.logger,
 		metrics:          NewProducerMetrics(meter),
 	}, nil

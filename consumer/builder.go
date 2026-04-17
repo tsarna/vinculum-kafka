@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	bus "github.com/tsarna/vinculum-bus"
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
@@ -19,6 +20,7 @@ type ConsumerBuilder struct {
 	subscriber    bus.Subscriber
 	commitMode    CommitMode
 	dlqTopic      string
+	wireFormat    wire.WireFormat
 	logger        *zap.Logger
 	meterProvider metric.MeterProvider
 }
@@ -79,6 +81,19 @@ func (b *ConsumerBuilder) WithDLQTopic(topic string) *ConsumerBuilder {
 	return b
 }
 
+// WithWireFormat sets the wire format used to deserialize inbound payloads.
+func (b *ConsumerBuilder) WithWireFormat(f wire.WireFormat) *ConsumerBuilder {
+	b.wireFormat = f
+	return b
+}
+
+// WithWireFormatName sets the wire format by name (e.g. "json", "auto").
+// Build returns an error if the name is not recognized.
+func (b *ConsumerBuilder) WithWireFormatName(name string) *ConsumerBuilder {
+	b.wireFormat = wire.ByName(name)
+	return b
+}
+
 // WithMeterProvider sets the OTel MeterProvider used to instrument the consumer.
 // If nil (the default), no metrics are collected.
 func (b *ConsumerBuilder) WithMeterProvider(p metric.MeterProvider) *ConsumerBuilder {
@@ -136,12 +151,18 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		meter = b.meterProvider.Meter("github.com/tsarna/vinculum-kafka/consumer")
 	}
 
+	wf := b.wireFormat
+	if wf == nil {
+		wf = wire.Auto
+	}
+
 	return &KafkaConsumer{
 		client:        client,
 		subscriptions: b.subscriptions,
 		subscriber:    b.subscriber,
 		commitMode:    b.commitMode,
 		dlqTopic:      b.dlqTopic,
+		wireFormat:    wf,
 		logger:        b.logger,
 		metrics:       NewConsumerMetrics(meter),
 	}, nil

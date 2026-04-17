@@ -7,6 +7,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tsarna/go2cty2go v0.1.2
 	github.com/tsarna/vinculum-bus v0.11.0
+	github.com/tsarna/vinculum-wire v0.1.0
 	github.com/twmb/franz-go v1.20.7
 	github.com/zclconf/go-cty v1.18.0
 	go.opentelemetry.io/otel v1.43.0

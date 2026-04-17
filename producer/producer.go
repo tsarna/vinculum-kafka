@@ -2,7 +2,6 @@ package producer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/amir-yaghoubi/mqttpattern"
 	"github.com/tsarna/go2cty2go"
 	bus "github.com/tsarna/vinculum-bus"
+	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/zclconf/go-cty/cty"
 	"go.uber.org/zap"
@@ -70,6 +70,7 @@ type KafkaProducer struct {
 	topicMappings    []TopicMapping
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
+	wireFormat       wire.WireFormat
 	logger           *zap.Logger
 	metrics          *ProducerMetrics
 }
@@ -86,7 +87,18 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 		return nil // DefaultTopicIgnore — no match, silently skip
 	}
 
-	value, err := serializePayload(msg)
+	// Convert cty.Value to native Go before wire-format serialization.
+	// This shim will be removed once CtyWireFormat handles it at the
+	// vinculum config layer.
+	if val, ok := msg.(cty.Value); ok {
+		native, err := go2cty2go.CtyToAny(val)
+		if err != nil {
+			return fmt.Errorf("kafka producer: cty conversion: %w", err)
+		}
+		msg = native
+	}
+
+	value, err := p.wireFormat.Serialize(msg)
 	if err != nil {
 		return fmt.Errorf("kafka producer: serialize payload: %w", err)
 	}
@@ -179,30 +191,7 @@ func (p *KafkaProducer) resolveTopicAndKey(topic string, msg any, fields map[str
 	}
 }
 
-// serializePayload converts a vinculum message payload to []byte for the
-// Kafka record value.
-//
-//   - cty.Value  → go2cty2go.CtyToAny() → json.Marshal
-//   - []byte     → pass through unchanged
-//   - anything else → json.Marshal
-func serializePayload(msg any) ([]byte, error) {
-	if msg == nil {
-		return nil, nil
-	}
-
-	// Convert cty.Value to native Go type before JSON marshalling.
-	if val, ok := msg.(cty.Value); ok {
-		var err error
-		msg, err = go2cty2go.CtyToAny(val)
-		if err != nil {
-			return nil, fmt.Errorf("cty conversion: %w", err)
-		}
-	}
-
-	// Pass raw bytes through unchanged.
-	if b, ok := msg.([]byte); ok {
-		return b, nil
-	}
-
-	return json.Marshal(msg)
+// WireFormat returns the wire format used by this producer.
+func (p *KafkaProducer) WireFormat() wire.WireFormat {
+	return p.wireFormat
 }
