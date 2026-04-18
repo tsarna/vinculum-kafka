@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-04-18
+
+### Added
+
+- **`vinculum.client.name` metric attribute** — all producer and consumer metrics now carry a `vinculum.client.name` attribute identifying the vinculum client block. Builders accept `WithClientName(name)` to set it.
+
 ## [0.9.0] - 2026-04-17
 
 ### Added

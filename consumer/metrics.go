@@ -17,11 +17,12 @@ type ConsumerMetrics struct {
 	lag             metric.Float64Gauge    // kafka.consumer.lag
 	processDuration metric.Float64Histogram // messaging.process.duration
 	commits         metric.Int64Counter    // kafka.consumer.commits
+	clientTag       attribute.KeyValue
 }
 
 // NewConsumerMetrics creates a ConsumerMetrics using the given Meter.
 // Returns nil if meter is nil, which is safe to call all methods on.
-func NewConsumerMetrics(meter metric.Meter) *ConsumerMetrics {
+func NewConsumerMetrics(clientName string, meter metric.Meter) *ConsumerMetrics {
 	if meter == nil {
 		return nil
 	}
@@ -51,6 +52,7 @@ func NewConsumerMetrics(meter metric.Meter) *ConsumerMetrics {
 		lag:             l,
 		processDuration: pd,
 		commits:         c,
+		clientTag:       attribute.String("vinculum.client.name", clientName),
 	}
 }
 
@@ -67,7 +69,7 @@ func (m *ConsumerMetrics) RecordReceived(ctx context.Context, topic string) {
 	if m == nil {
 		return
 	}
-	m.recordsReceived.Add(ctx, 1, topicAttr(topic))
+	m.recordsReceived.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(m.clientTag))
 }
 
 // RecordError increments the error counter for topic.
@@ -75,7 +77,7 @@ func (m *ConsumerMetrics) RecordError(ctx context.Context, topic string) {
 	if m == nil {
 		return
 	}
-	m.errors.Add(ctx, 1, topicAttr(topic))
+	m.errors.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(m.clientTag))
 }
 
 // UpdateLag sets the lag gauge for a topic/partition.
@@ -86,6 +88,7 @@ func (m *ConsumerMetrics) UpdateLag(ctx context.Context, topic string, partition
 	m.lag.Record(ctx, float64(lag),
 		topicAttr(topic),
 		metric.WithAttributes(attribute.String("messaging.destination.partition.id", fmt.Sprintf("%d", partition))),
+		metric.WithAttributes(m.clientTag),
 	)
 }
 
@@ -94,7 +97,7 @@ func (m *ConsumerMetrics) RecordProcessDuration(ctx context.Context, topic strin
 	if m == nil {
 		return
 	}
-	m.processDuration.Record(ctx, d.Seconds(), topicAttr(topic))
+	m.processDuration.Record(ctx, d.Seconds(), topicAttr(topic), metric.WithAttributes(m.clientTag))
 }
 
 // RecordCommit increments the commits counter.
@@ -102,5 +105,5 @@ func (m *ConsumerMetrics) RecordCommit(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	m.commits.Add(ctx, 1, metric.WithAttributes(attribute.String("messaging.system", "kafka")))
+	m.commits.Add(ctx, 1, metric.WithAttributes(attribute.String("messaging.system", "kafka"), m.clientTag))
 }

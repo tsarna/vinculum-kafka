@@ -14,11 +14,12 @@ type ProducerMetrics struct {
 	recordsSent     metric.Int64Counter    // messaging.client.sent.messages
 	errors          metric.Int64Counter    // kafka.producer.errors
 	produceDuration metric.Float64Histogram // messaging.client.operation.duration
+	clientTag       attribute.KeyValue
 }
 
 // NewProducerMetrics creates a ProducerMetrics using the given Meter.
 // Returns nil if meter is nil, which is safe to call all methods on.
-func NewProducerMetrics(meter metric.Meter) *ProducerMetrics {
+func NewProducerMetrics(clientName string, meter metric.Meter) *ProducerMetrics {
 	if meter == nil {
 		return nil
 	}
@@ -38,6 +39,7 @@ func NewProducerMetrics(meter metric.Meter) *ProducerMetrics {
 		recordsSent:     rs,
 		errors:          e,
 		produceDuration: pd,
+		clientTag:       attribute.String("vinculum.client.name", clientName),
 	}
 }
 
@@ -56,6 +58,7 @@ func (m *ProducerMetrics) RecordSent(ctx context.Context, topic string) {
 	}
 	m.recordsSent.Add(ctx, 1, topicAttr(topic),
 		metric.WithAttributes(attribute.String("messaging.operation.name", "send")),
+		metric.WithAttributes(m.clientTag),
 	)
 }
 
@@ -64,7 +67,7 @@ func (m *ProducerMetrics) RecordError(ctx context.Context, topic string) {
 	if m == nil {
 		return
 	}
-	m.errors.Add(ctx, 1, topicAttr(topic))
+	m.errors.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(m.clientTag))
 }
 
 // RecordProduceDuration records how long ProduceSync took for the given Kafka topic.
@@ -74,5 +77,6 @@ func (m *ProducerMetrics) RecordProduceDuration(ctx context.Context, topic strin
 	}
 	m.produceDuration.Record(ctx, d.Seconds(), topicAttr(topic),
 		metric.WithAttributes(attribute.String("messaging.operation.name", "send")),
+		metric.WithAttributes(m.clientTag),
 	)
 }

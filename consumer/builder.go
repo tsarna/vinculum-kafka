@@ -14,6 +14,7 @@ import (
 // ConsumerBuilder constructs a KafkaConsumer with a fluent API.
 type ConsumerBuilder struct {
 	baseOpts      []kgo.Opt
+	clientName    string
 	groupID       string
 	startOffset   kgo.Offset
 	subscriptions []TopicSubscription
@@ -94,6 +95,12 @@ func (b *ConsumerBuilder) WithWireFormatName(name string) *ConsumerBuilder {
 	return b
 }
 
+// WithClientName sets the vinculum client name used in metric attributes.
+func (b *ConsumerBuilder) WithClientName(name string) *ConsumerBuilder {
+	b.clientName = name
+	return b
+}
+
 // WithMeterProvider sets the OTel MeterProvider used to instrument the consumer.
 // If nil (the default), no metrics are collected.
 func (b *ConsumerBuilder) WithMeterProvider(p metric.MeterProvider) *ConsumerBuilder {
@@ -164,6 +171,6 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		dlqTopic:      b.dlqTopic,
 		wireFormat:    wf,
 		logger:        b.logger,
-		metrics:       NewConsumerMetrics(meter),
+		metrics:       NewConsumerMetrics(b.clientName, meter),
 	}, nil
 }

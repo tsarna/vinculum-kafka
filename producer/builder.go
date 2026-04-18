@@ -13,6 +13,7 @@ import (
 // ProducerBuilder constructs a KafkaProducer with a fluent API.
 type ProducerBuilder struct {
 	client           *kgo.Client
+	clientName       string
 	topicMappings    []TopicMapping
 	defaultTransform DefaultTopicTransform
 	produceMode      ProduceMode
@@ -76,6 +77,12 @@ func (b *ProducerBuilder) WithWireFormatName(name string) *ProducerBuilder {
 	return b
 }
 
+// WithClientName sets the vinculum client name used in metric attributes.
+func (b *ProducerBuilder) WithClientName(name string) *ProducerBuilder {
+	b.clientName = name
+	return b
+}
+
 // WithLogger sets the logger used for async produce errors.
 func (b *ProducerBuilder) WithLogger(l *zap.Logger) *ProducerBuilder {
 	if l != nil {
@@ -107,6 +114,6 @@ func (b *ProducerBuilder) Build() (*KafkaProducer, error) {
 		produceMode:      b.produceMode,
 		wireFormat:       wf,
 		logger:           b.logger,
-		metrics:          NewProducerMetrics(meter),
+		metrics:          NewProducerMetrics(b.clientName, meter),
 	}, nil
 }
