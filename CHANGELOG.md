@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.1] - 2026-04-18
+## [0.9.2] - 2026-04-22
+
+### Fixed
+
+- **Async producer context cancellation** — async mode now uses `context.WithoutCancel` so a canceled caller context (e.g. completed HTTP request) does not cause franz-go to fail the entire produce batch. Trace context values are preserved. Sync mode is unchanged — it correctly uses the caller's context for cancellation.
+
+## [0.9.1] - 2026-04-19
 
 ### Added
 

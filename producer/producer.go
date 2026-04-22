@@ -117,7 +117,13 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 		p.metrics.RecordSent(ctx, kafkaTopic)
 		p.metrics.RecordProduceDuration(ctx, kafkaTopic, elapsed)
 	case ProduceModeAsync:
-		p.client.Produce(ctx, record, func(r *kgo.Record, err error) {
+		// Detach from the caller's context cancellation — the caller
+		// (e.g. an HTTP handler or bus delivery) may return before the
+		// broker acks. A canceled context would cause franz-go to fail
+		// the entire batch. WithoutCancel preserves trace context values.
+		asyncCtx := context.WithoutCancel(ctx)
+		record.Context = asyncCtx
+		p.client.Produce(asyncCtx, record, func(r *kgo.Record, err error) {
 			if err != nil {
 				p.logger.Error("kafka async produce error",
 					zap.String("topic", r.Topic),
