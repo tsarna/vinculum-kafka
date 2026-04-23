@@ -27,8 +27,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/tsarna/vinculum-bus v0.11.0 h1:vg2HbElFoh0s6vmPnTvcNwbccO2/qp7o5nYTTC8l5sw=
-github.com/tsarna/vinculum-bus v0.11.0/go.mod h1:fwVN24q/2iKXvtZQeiRB0tW41WsGWsV6nyvwetB25fA=
+github.com/tsarna/vinculum-bus v0.12.0 h1:tCgOUpoKfX59uopUVMPTYI9o+WJL3w/byemaIueLtEo=
+github.com/tsarna/vinculum-bus v0.12.0/go.mod h1:fwVN24q/2iKXvtZQeiRB0tW41WsGWsV6nyvwetB25fA=
 github.com/tsarna/vinculum-wire v0.1.0 h1:GWvDcuYBYkceC/hzwUYUvMqFI+yThxEwbYmjYSQIQ18=
 github.com/tsarna/vinculum-wire v0.1.0/go.mod h1:hh64ALOi1PX+YfFpnKTFL/y0X79mvaDuTepRaiNHN7w=
 github.com/twmb/franz-go v1.20.7 h1:P4MGSXJjjAPP3NRGPCks/Lrq+j+twWMVl1qYCVgNmWY=

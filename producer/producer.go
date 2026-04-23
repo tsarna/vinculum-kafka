@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amir-yaghoubi/mqttpattern"
 	bus "github.com/tsarna/vinculum-bus"
+	"github.com/tsarna/vinculum-bus/topicmatch"
 	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
@@ -143,13 +143,13 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 // defaultTransform when no mapping matches.
 func (p *KafkaProducer) resolveTopicAndKey(topic string, msg any, fields map[string]string) (kafkaTopic string, key []byte, err error) {
 	for _, m := range p.topicMappings {
-		if !mqttpattern.Matches(m.Pattern, topic) {
+		if !topicmatch.Matches(m.Pattern, topic) {
 			continue
 		}
 
 		// Merge pattern-extracted fields with provided fields.
 		// Pattern-extracted values take precedence (they are derived from the topic).
-		extracted := mqttpattern.Extract(m.Pattern, topic)
+		extracted := topicmatch.Extract(m.Pattern, topic)
 		var mergedFields map[string]string
 		if len(extracted) > 0 {
 			mergedFields = make(map[string]string, len(fields)+len(extracted))
