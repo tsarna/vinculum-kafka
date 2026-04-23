@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-04-23
+
+### Changed
+
+- **Topic matching routes through `vinculum-bus/topicmatch`** — producer pattern routing now honors MQTT 5.0 §4.7.2: filters starting with `+` or `#` no longer match reserved `$`-prefixed topics. Exact and `$`-prefixed patterns are unaffected. Requires vinculum-bus v0.12.0.
+
 ## [0.9.2] - 2026-04-22
 
 ### Fixed
