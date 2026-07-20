@@ -3,6 +3,7 @@ package consumer
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	bus "github.com/tsarna/vinculum-bus"
@@ -54,6 +55,7 @@ type KafkaConsumer struct {
 	commitMode    CommitMode
 	dlqTopic      string // optional; if non-empty, failed records are produced here
 	wireFormat    wire.WireFormat
+	onDecodeError wire.DecodeErrorHook
 	logger        *zap.Logger
 	metrics       *ConsumerMetrics
 
@@ -164,27 +166,52 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 		s := string(r.Key)
 		key = &s
 	}
+	// A decode failure is fatal to the record: the configured wire format is
+	// a contract, so a value that doesn't satisfy it is rejected rather than
+	// delivered as raw bytes. Use wire format "auto" for best-effort
+	// decoding. The returned error reaches the poll loop, which routes the
+	// record to dlq_topic when one is configured.
 	var msg any
 	if r.Value != nil {
 		var deserErr error
 		msg, deserErr = c.wireFormat.Deserialize(r.Value)
 		if deserErr != nil {
-			c.logger.Warn("kafka consumer: deserialize failed, passing raw bytes",
+			c.logger.Error("kafka consumer: deserialize failed",
 				zap.String("topic", r.Topic),
+				zap.String("wire_format", c.wireFormat.Name()),
 				zap.Error(deserErr))
-			msg = r.Value
+			c.metrics.RecordError(ctx, r.Topic, "deserialize")
+			if c.onDecodeError != nil {
+				attrs := map[string]string{
+					"topic":     r.Topic,
+					"partition": strconv.FormatInt(int64(r.Partition), 10),
+					"offset":    strconv.FormatInt(r.Offset, 10),
+				}
+				if key != nil {
+					attrs["key"] = *key
+				}
+				c.onDecodeError(ctx, wire.DecodeError{
+					Raw:    r.Value,
+					Err:    deserErr,
+					Format: c.wireFormat.Name(),
+					Topic:  r.Topic,
+					Fields: fields,
+					Attrs:  attrs,
+				})
+			}
+			return fmt.Errorf("kafka consumer: deserialize value for %q: %w", r.Topic, deserErr)
 		}
 	}
 
 	sub, err := c.findSubscription(r.Topic)
 	if err != nil {
-		c.metrics.RecordError(ctx, r.Topic)
+		c.metrics.RecordError(ctx, r.Topic, "subscription")
 		return err
 	}
 
 	vinculumTopic, err := sub.VinculumTopicFunc(r.Topic, key, fields, msg)
 	if err != nil {
-		c.metrics.RecordError(ctx, r.Topic)
+		c.metrics.RecordError(ctx, r.Topic, "vinculum_topic")
 		return fmt.Errorf("kafka consumer: resolve vinculum topic for %q: %w", r.Topic, err)
 	}
 
@@ -211,7 +238,7 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		c.metrics.RecordError(ctx, r.Topic)
+		c.metrics.RecordError(ctx, r.Topic, "subscriber")
 		return err
 	}
 	c.metrics.RecordReceived(ctx, r.Topic)

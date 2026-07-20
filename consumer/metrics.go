@@ -12,11 +12,11 @@ import (
 // ConsumerMetrics holds the OTel instruments for a KafkaConsumer.
 // A nil *ConsumerMetrics is valid and results in no-op recording.
 type ConsumerMetrics struct {
-	recordsReceived metric.Int64Counter    // messaging.client.consumed.messages
-	errors          metric.Int64Counter    // kafka.consumer.errors
-	lag             metric.Float64Gauge    // kafka.consumer.lag
+	recordsReceived metric.Int64Counter     // messaging.client.consumed.messages
+	errors          metric.Int64Counter     // kafka.consumer.errors
+	lag             metric.Float64Gauge     // kafka.consumer.lag
 	processDuration metric.Float64Histogram // messaging.process.duration
-	commits         metric.Int64Counter    // kafka.consumer.commits
+	commits         metric.Int64Counter     // kafka.consumer.commits
 	clientTag       attribute.KeyValue
 }
 
@@ -72,12 +72,18 @@ func (m *ConsumerMetrics) RecordReceived(ctx context.Context, topic string) {
 	m.recordsReceived.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(m.clientTag))
 }
 
-// RecordError increments the error counter for topic.
-func (m *ConsumerMetrics) RecordError(ctx context.Context, topic string) {
+// RecordError increments the error counter for topic. errType classifies the
+// failure (e.g. "deserialize", "subscription", "subscriber") and is recorded
+// as the error.type attribute; an empty errType omits it.
+func (m *ConsumerMetrics) RecordError(ctx context.Context, topic, errType string) {
 	if m == nil {
 		return
 	}
-	m.errors.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(m.clientTag))
+	attrs := []attribute.KeyValue{m.clientTag}
+	if errType != "" {
+		attrs = append(attrs, attribute.String("error.type", errType))
+	}
+	m.errors.Add(ctx, 1, topicAttr(topic), metric.WithAttributes(attrs...))
 }
 
 // UpdateLag sets the lag gauge for a topic/partition.

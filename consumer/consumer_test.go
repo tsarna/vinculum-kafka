@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	bus "github.com/tsarna/vinculum-bus"
 	wire "github.com/tsarna/vinculum-wire"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -58,6 +58,80 @@ func staticTopicFunc(topic string) VinculumTopicFunc {
 	return func(_ string, _ *string, _ map[string]string, _ any) (string, error) {
 		return topic, nil
 	}
+}
+
+// ── strict decode ─────────────────────────────────────────────────────────────
+
+// makeStrictConsumer builds a JSON-wire-format consumer, optionally with a
+// decode-error hook.
+func makeStrictConsumer(target bus.Subscriber, hook wire.DecodeErrorHook) *KafkaConsumer {
+	c := makeConsumer([]TopicSubscription{
+		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("v/foo")},
+	}, target)
+	c.wireFormat = wire.JSON
+	c.onDecodeError = hook
+	return c
+}
+
+func TestProcessRecord_DecodeErrorIsFatalAndNotDelivered(t *testing.T) {
+	target := &captureSubscriber{}
+	c := makeStrictConsumer(target, nil)
+
+	err := c.processRecord(context.Background(),
+		&kgo.Record{Topic: "foo", Value: []byte("not json {{")})
+
+	require.Error(t, err, "the configured wire format is a contract")
+	assert.Nil(t, target.msg, "malformed record must not be delivered")
+	assert.Empty(t, target.topic)
+}
+
+func TestProcessRecord_DecodeErrorInvokesHookWithoutSuppressing(t *testing.T) {
+	target := &captureSubscriber{}
+	var got wire.DecodeError
+	hookCalls := 0
+
+	c := makeStrictConsumer(target, func(_ context.Context, e wire.DecodeError) {
+		hookCalls++
+		got = e
+	})
+
+	value := []byte("not json {{")
+	err := c.processRecord(context.Background(), &kgo.Record{
+		Topic:     "foo",
+		Value:     value,
+		Key:       []byte("k1"),
+		Partition: 3,
+		Offset:    42,
+	})
+
+	require.Equal(t, 1, hookCalls)
+	assert.Equal(t, value, got.Raw)
+	assert.Equal(t, "json", got.Format)
+	assert.Equal(t, "foo", got.Topic)
+	assert.Equal(t, "foo", got.Attrs["topic"])
+	assert.Equal(t, "3", got.Attrs["partition"])
+	assert.Equal(t, "42", got.Attrs["offset"])
+	assert.Equal(t, "k1", got.Attrs["key"])
+	require.Error(t, got.Err)
+
+	// The hook observes; it does not suppress.
+	require.Error(t, err)
+	assert.Nil(t, target.msg)
+}
+
+func TestProcessRecord_AutoWireFormatToleratesNonJSON(t *testing.T) {
+	target := &captureSubscriber{}
+	c := makeConsumer([]TopicSubscription{
+		{KafkaTopic: "foo", VinculumTopicFunc: staticTopicFunc("v/foo")},
+	}, target)
+
+	// "auto" is the documented migration path off the old tolerant
+	// behavior: it never fails to decode, yielding a string.
+	err := c.processRecord(context.Background(),
+		&kgo.Record{Topic: "foo", Value: []byte("not json {{")})
+
+	require.NoError(t, err)
+	assert.Equal(t, "not json {{", target.msg)
 }
 
 // ── deserialize (via wire format) ─────────────────────────────────────────────

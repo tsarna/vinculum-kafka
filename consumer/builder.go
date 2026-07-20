@@ -22,6 +22,7 @@ type ConsumerBuilder struct {
 	commitMode    CommitMode
 	dlqTopic      string
 	wireFormat    wire.WireFormat
+	onDecodeError wire.DecodeErrorHook
 	logger        *zap.Logger
 	meterProvider metric.MeterProvider
 }
@@ -92,6 +93,15 @@ func (b *ConsumerBuilder) WithWireFormat(f wire.WireFormat) *ConsumerBuilder {
 // Build returns an error if the name is not recognized.
 func (b *ConsumerBuilder) WithWireFormatName(name string) *ConsumerBuilder {
 	b.wireFormat = wire.ByName(name)
+	return b
+}
+
+// WithDecodeErrorHook sets an observer invoked when an inbound record value
+// fails to deserialize. The hook cannot suppress the failure: the record is
+// treated as failed either way (routed to dlq_topic when configured, or left
+// uncommitted). nil (the default) means no observer.
+func (b *ConsumerBuilder) WithDecodeErrorHook(h wire.DecodeErrorHook) *ConsumerBuilder {
+	b.onDecodeError = h
 	return b
 }
 
@@ -170,6 +180,7 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		commitMode:    b.commitMode,
 		dlqTopic:      b.dlqTopic,
 		wireFormat:    wf,
+		onDecodeError: b.onDecodeError,
 		logger:        b.logger,
 		metrics:       NewConsumerMetrics(b.clientName, meter),
 	}, nil

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-19
+
+### Changed
+
+- **BREAKING: deserialize failures are no longer swallowed.** `KafkaConsumer.processRecord`
+  used to log a warning and pass the **raw bytes** through as the message payload when the
+  configured wire format failed to decode. A decode failure is now fatal to the record:
+  `processRecord` returns an error and the record is not delivered.
+
+  **Configure `WithDLQTopic`.** A failed record's offset is not committed. With a DLQ topic
+  set, the record is routed there and the offset advances; without one the consumer
+  re-fetches the same record forever and the partition never makes progress — every later
+  message on it is starved.
+
+  Callers wanting best-effort decoding should use `wire.Auto`, which never fails (it yields
+  a `string` for anything it can't parse as JSON). Note that is not an exact replacement:
+  the old fallback produced `[]byte`, so a subscriber that type-switches on `[]byte` must
+  be adjusted.
+
+- **BREAKING: `ConsumerMetrics.RecordError` takes an `errType` argument** —
+  `RecordError(ctx, topic, errType)` — recorded as the `error.type` attribute. Existing
+  call sites pass `"subscription"`, `"vinculum_topic"`, or `"subscriber"`.
+
+- Requires `github.com/tsarna/vinculum-wire` v0.3.0 for the `DecodeError` /
+  `DecodeErrorHook` types.
+
+### Added
+
+- `WithDecodeErrorHook(wire.DecodeErrorHook)` on the consumer builder. The hook observes a
+  decode failure — it receives the raw bytes, the error, the format name, and the record's
+  topic, partition, offset, and key — but cannot suppress it: the record is treated as
+  failed either way. nil (the default) means no observer.
+
+- Deserialize failures are recorded on the error counter with
+  `error.type = "deserialize"`.
+
 ## [0.10.0] - 2026-05-27
 
 ### Changed
