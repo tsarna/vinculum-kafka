@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-02
+
+### Changed
+
+- **BREAKING: the decode-error hook's Kafka topic is keyed `kafka_topic`, not `topic`.**
+  `topic` is reserved by `wire.DecodeError`'s own `Topic` field, and a consumer is
+  expected to drop a colliding `Attrs` key rather than let a receiver shadow a fixed
+  field. Vinculum does exactly that, so this key never reached a config at all; a
+  consumer reading `e.Attrs` directly did see it, which is what makes the rename
+  breaking for them.
+
+  No information was lost either way — the dropped value duplicated `Topic` — but the
+  key was unusable through any consumer that honours the reserved set, and every other
+  receiver names its transport identifier after the transport (`routing_key`, `stream`,
+  `entry_id`, and `mqtt_topic` since vinculum-mqtt v0.10.0).
+
+  Consumers reading `e.Attrs["topic"]` should read `e.Attrs["kafka_topic"]`, or
+  `e.Topic`, which carries the same value.
+
+- Requires `vinculum-wire` v0.5.0 for `wire.IsReservedAttr`, which the consumer's tests
+  now assert every `Attrs` key against — so a key that would be dropped by a consumer
+  fails here instead of vanishing silently downstream.
+
 ## [0.11.0] - 2026-07-19
 
 ### Changed

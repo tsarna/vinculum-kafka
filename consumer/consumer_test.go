@@ -108,11 +108,19 @@ func TestProcessRecord_DecodeErrorInvokesHookWithoutSuppressing(t *testing.T) {
 	assert.Equal(t, value, got.Raw)
 	assert.Equal(t, "json", got.Format)
 	assert.Equal(t, "foo", got.Topic)
-	assert.Equal(t, "foo", got.Attrs["topic"])
+	assert.Equal(t, "foo", got.Attrs["kafka_topic"])
 	assert.Equal(t, "3", got.Attrs["partition"])
 	assert.Equal(t, "42", got.Attrs["offset"])
 	assert.Equal(t, "k1", got.Attrs["key"])
 	require.Error(t, got.Err)
+
+	// A key colliding with one of DecodeError's own fields is dropped by a
+	// consumer rather than allowed to shadow it, so it would vanish between
+	// here and whatever reads it. Fail at the source instead.
+	for key := range got.Attrs {
+		assert.False(t, wire.IsReservedAttr(key),
+			"Attrs key %q collides with a fixed DecodeError field and would be dropped", key)
+	}
 
 	// The hook observes; it does not suppress.
 	require.Error(t, err)

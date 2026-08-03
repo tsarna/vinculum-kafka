@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tsarna/vinculum-bus v0.15.1
-	github.com/tsarna/vinculum-wire v0.4.0
+	github.com/tsarna/vinculum-wire v0.5.0
 	github.com/twmb/franz-go v1.21.5
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0

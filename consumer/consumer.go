@@ -183,9 +183,12 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 			c.metrics.RecordError(ctx, r.Topic, "deserialize")
 			if c.onDecodeError != nil {
 				attrs := map[string]string{
-					"topic":     r.Topic,
-					"partition": strconv.FormatInt(int64(r.Partition), 10),
-					"offset":    strconv.FormatInt(r.Offset, 10),
+					// Named for the transport, not for the concept: "topic"
+					// is reserved by DecodeError's own Topic field and would
+					// be dropped by a consumer honouring the reserved set.
+					"kafka_topic": r.Topic,
+					"partition":   strconv.FormatInt(int64(r.Partition), 10),
+					"offset":      strconv.FormatInt(r.Offset, 10),
 				}
 				if key != nil {
 					attrs["key"] = *key
