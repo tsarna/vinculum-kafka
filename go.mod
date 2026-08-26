@@ -9,7 +9,7 @@ require (
 	github.com/twmb/franz-go v1.21.6
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
-	go.opentelemetry.io/otel/sdk v1.45.0
+	go.opentelemetry.io/otel/sdk v1.46.0
 	go.uber.org/zap v1.28.0
 )
 
