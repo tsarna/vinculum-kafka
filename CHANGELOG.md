@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-01
+
 ### Fixed
 
 - **`produce_mode = "async"` no longer acknowledges the inbound message before
