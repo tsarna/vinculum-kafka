@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`produce_mode = "async"` no longer acknowledges the inbound message before
+  the broker has taken the outbound one.** The async path hands the record to
+  franz-go and returns immediately, so a bridge — a receiver on one transport
+  feeding a producer on Kafka — settled its inbound delivery at that moment.
+  A produce that then failed had nothing left to redeliver, in exactly the
+  situation where at-least-once matters most.
+
+  The producer now reports its deliveries as `bus.Deferred` when its mode is
+  async, and the produce callback settles once the broker has answered. The
+  record already carried the detached context, so the callback already held the
+  settler.
+
+  The default is `sync`, which made this worse rather than better: an author
+  flipping a throughput knob gave up the delivery guarantee, with nothing in
+  the configuration mentioning acknowledgement. Under `sync` the produce has
+  completed by the time `OnEvent` returns and its error is the outcome, so
+  nothing there changes.
+
+### Changed
+
+- The async produce callback records its metrics against the detached context
+  rather than the caller's, which by then may have been canceled — the same
+  reason the record itself carries the detached one.
+
 ## [0.12.0] - 2026-08-02
 
 ### Changed

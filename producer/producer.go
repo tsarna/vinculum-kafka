@@ -120,7 +120,8 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 		// Detach from the caller's context cancellation — the caller
 		// (e.g. an HTTP handler or bus delivery) may return before the
 		// broker acks. A canceled context would cause franz-go to fail
-		// the entire batch. WithoutCancel preserves trace context values.
+		// the entire batch. WithoutCancel preserves trace context values,
+		// and the settler of whatever inbound delivery caused this event.
 		asyncCtx := context.WithoutCancel(ctx)
 		record.Context = asyncCtx
 		p.client.Produce(asyncCtx, record, func(r *kgo.Record, err error) {
@@ -128,14 +129,39 @@ func (p *KafkaProducer) OnEvent(ctx context.Context, topic string, msg any, fiel
 				p.logger.Error("kafka async produce error",
 					zap.String("topic", r.Topic),
 					zap.Error(err))
-				p.metrics.RecordError(ctx, r.Topic)
+				p.metrics.RecordError(asyncCtx, r.Topic)
 			} else {
-				p.metrics.RecordSent(ctx, r.Topic)
+				p.metrics.RecordSent(asyncCtx, r.Topic)
 			}
+
+			// This callback is where the produce actually finishes, so it is
+			// where the inbound delivery that caused it gets its answer. See
+			// DeliveryDisposition: OnEvent returned before any of this
+			// happened.
+			bus.SettleOnReturn(asyncCtx, nil, err)
 		})
 	}
 
 	return nil
+}
+
+// DeliveryDisposition reports whether this producer returns before the broker
+// has taken the message, which under ProduceModeAsync it does.
+//
+// That makes the disposition a configuration choice rather than a property of
+// the type, and it is why the question is a method. Without it, flipping a
+// throughput knob would quietly give up the delivery guarantee on a bridge:
+// the inbound message would be acknowledged the moment the record was handed
+// to franz-go, so a produce that then failed would have nothing to redeliver,
+// with nothing in the configuration mentioning acknowledgement at all.
+//
+// Under ProduceModeSync the produce has completed by the time OnEvent returns
+// and its error is the outcome, so there is nothing to defer.
+func (p *KafkaProducer) DeliveryDisposition() bus.Disposition {
+	if p.produceMode == ProduceModeAsync {
+		return bus.Deferred
+	}
+	return bus.Handled
 }
 
 // resolveTopicAndKey iterates topic_mappings in order (first match wins)
