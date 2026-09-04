@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-04
+
+### Added
+
+- **A per-record settler, on a per-partition low-water-mark commit tracker.**
+  A Kafka commit is an assertion about a *prefix* — committing offset N says
+  everything below N is done — which is why this consumer was the only one that
+  could not settle a single delivery. It now tracks, per partition, the offset
+  of the oldest record that has not completed, and commits only that.
+
+  Each record carries a `bus.Settler` on its context, so the acknowledgement
+  follows the work rather than the call that handed it on: behind an async
+  queue, across a bus, or wherever a caller settles it explicitly. A settle
+  marks the record complete; the mark then advances over every contiguous
+  completion above it. An offset therefore never passes a record still in
+  flight, whatever order completions arrive in.
+
+  What follows from that:
+
+  - A record nothing settles stops its partition's committed offset. Records
+    after it keep being processed, and everything from it onwards is handled
+    again by whoever next owns the partition.
+  - A partition whose unsettled window reaches `WithMaxInFlight` (default 1024)
+    stops being fetched until half of it has drained, rather than growing
+    without bound. Nothing is dropped, and the pause is logged with the topic,
+    partition and the mark it stopped at.
+  - A settle for a partition that has been revoked reports `bus.StaleError`
+    with "partition reassigned", instead of moving a mark another member of the
+    group now owns.
+  - Where completions arrive in order the mark is exact — the last settled
+    record plus one — and a restart replays only what settled since the last
+    commit. Where they do not, the mark is pinned at the oldest incomplete
+    record, so every record settled above it is delivered again after a restart
+    or a rebalance. An offset cannot record a hole, only where the finished
+    prefix ends, and committing past the hole would lose the record in it.
+    Bounded by `WithMaxInFlight`; work that settles out of order has to be
+    idempotent.
+
+  Only the mark is ever sent to Kafka, and it is sent with `CommitOffsetsSync`
+  rather than `CommitRecords`, whose "commit the records I just finished" shape
+  is the thing a mark replaces. That callback reports the call's own error but
+  not the per-partition error codes, so a rejection for one partition — a stale
+  generation, a fenced leader epoch — arrives looking like a success. It is read
+  here, because a mark wrongly recorded as committed is never offered again and
+  the loss would be permanent.
+
+- `WithMaxInFlight`, bounding how far a partition's completions may run behind
+  the records handed out. It is a bound on memory and on how much is reprocessed
+  at a rebalance, not a throughput knob.
+
+### Changed
+
+- **`WithAckMode` replaces `WithCommitMode`, which is removed along with the
+  `CommitMode` type and its constants.** A source-breaking rename: callers pass
+  `AckAfterHandling` where they passed `CommitAfterProcess`, and `AckPeriodic`
+  where they passed `CommitPeriodic`.
+
+  `CommitManual` has no direct replacement, because it never did what it said.
+  It reserved a mode nothing implemented and left franz-go's autocommit enabled,
+  so it behaved as `CommitPeriodic` — pass `AckPeriodic` to keep that, or
+  `AckManual` for the caller-controlled settle the name always promised.
+
+- **Dead-lettering moved from the poll loop into the nack.** A record refused
+  anywhere — including several hops downstream, by a caller that settles
+  explicitly — now reaches `dlq_topic`, where before only a failure the poll
+  loop saw could. The mark advances past a record only once the dead-letter
+  send has succeeded, so a failure there is handled again rather than lost.
+
+- The consumer sets `BlockRebalanceOnPoll` and handles `OnPartitionsRevoked` /
+  `OnPartitionsLost`, so a rebalance can only happen between polls, a revoke
+  commits what has completed before handing the partitions back, and a loss
+  forgets them without committing offsets the group has already moved past.
+
+- Each poll is bounded, so the loop commits marks that completed after the
+  poll returned even on a quiet topic. `Stop` commits once more on the way out,
+  which is what keeps an orderly shutdown from replaying finished work.
+
 ## [0.13.0] - 2026-09-01
 
 ### Fixed

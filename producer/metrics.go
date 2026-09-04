@@ -11,8 +11,8 @@ import (
 // ProducerMetrics holds the OTel instruments for a KafkaProducer.
 // A nil *ProducerMetrics is valid and results in no-op recording.
 type ProducerMetrics struct {
-	recordsSent     metric.Int64Counter    // messaging.client.sent.messages
-	errors          metric.Int64Counter    // kafka.producer.errors
+	recordsSent     metric.Int64Counter     // messaging.client.sent.messages
+	errors          metric.Int64Counter     // kafka.producer.errors
 	produceDuration metric.Float64Histogram // messaging.client.operation.duration
 	clientTag       attribute.KeyValue
 }

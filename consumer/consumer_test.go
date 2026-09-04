@@ -42,12 +42,15 @@ func (s *captureSubscriber) OnEvent(_ context.Context, topic string, msg any, fi
 	return s.err
 }
 
-// makeConsumer builds a KafkaConsumer without a kgo.Client for unit tests.
+// makeConsumer builds a KafkaConsumer without a kgo.Client for unit tests. The
+// tracker is what Build creates for every mode but AckPeriodic, and having it
+// here is what makes processRecord take the settling path a real receiver does.
 func makeConsumer(subs []TopicSubscription, target bus.Subscriber) *KafkaConsumer {
 	return &KafkaConsumer{
 		subscriptions: subs,
 		subscriber:    target,
-		commitMode:    CommitAfterProcess,
+		ackMode:       AckAfterHandling,
+		tracker:       newTracker(0),
 		wireFormat:    wire.Auto,
 		logger:        zap.NewNop(),
 	}
@@ -401,9 +404,7 @@ func TestBuildDLQRecord_HeadersAndMetadata(t *testing.T) {
 			{Key: "region", Value: []byte("us-east")},
 		},
 	}
-	procErr := errors.New("downstream failed")
-
-	dlq := c.buildDLQRecord(original, procErr)
+	dlq := c.buildDLQRecord(original, "downstream failed")
 
 	assert.Equal(t, "my.dlq", dlq.Topic)
 	assert.Equal(t, original.Key, dlq.Key)
@@ -420,7 +421,7 @@ func TestBuildDLQRecord_NoOriginalHeaders(t *testing.T) {
 	c := &KafkaConsumer{dlqTopic: "dlq", logger: zap.NewNop()}
 	original := &kgo.Record{Topic: "t", Value: []byte(`{}`)}
 
-	dlq := c.buildDLQRecord(original, errors.New("oops"))
+	dlq := c.buildDLQRecord(original, "oops")
 	hm := dlqHeaderMap(dlq)
 	assert.Equal(t, "oops", hm["vinculum-error"])
 	assert.Equal(t, "t", hm["vinculum-original-topic"])
@@ -450,4 +451,26 @@ func TestProcessRecord_NilKeyIsNilPointer(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, gotKey)
 	assert.Equal(t, "", *gotKey)
+}
+
+func TestDropPartitionsResumesWhatItPausedInTheClient(t *testing.T) {
+	// The pause is client state that no rebalance clears, and only a tracker
+	// entry can ask for a resume. A partition dropped while paused therefore
+	// has to be resumed here: handed back to this member it would still not be
+	// fetched, and with no entry left there would be no record arriving to make
+	// one.
+	cl, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	require.NoError(t, err)
+	defer cl.Close()
+
+	c := &KafkaConsumer{tracker: newTracker(1), logger: zap.NewNop()}
+	c.tracker.begin(&kgo.Record{Topic: "t", Partition: 0})
+
+	pause, _ := c.tracker.pressure()
+	require.Equal(t, stalledPartitions{{"t", 0, 0}}, pause)
+	require.NotEmpty(t, cl.PauseFetchPartitions(pause.partitions()))
+
+	c.dropPartitions(cl, map[string][]int32{"t": {0}})
+	assert.Empty(t, cl.PauseFetchPartitions(nil),
+		"the pause must not outlive the assignment that asked for it")
 }

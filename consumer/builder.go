@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -19,7 +20,8 @@ type ConsumerBuilder struct {
 	startOffset   kgo.Offset
 	subscriptions []TopicSubscription
 	subscriber    bus.Subscriber
-	commitMode    CommitMode
+	ackMode       AckMode
+	maxInFlight   int
 	dlqTopic      string
 	wireFormat    wire.WireFormat
 	onDecodeError wire.DecodeErrorHook
@@ -28,11 +30,11 @@ type ConsumerBuilder struct {
 }
 
 // NewConsumer returns a ConsumerBuilder with default settings:
-// commit_mode=after_process, start_offset=stored.
+// ack=after_handling, start_offset=stored.
 func NewConsumer() *ConsumerBuilder {
 	return &ConsumerBuilder{
 		startOffset: kgo.NewOffset(),
-		commitMode:  CommitAfterProcess,
+		ackMode:     AckAfterHandling,
 		logger:      zap.NewNop(),
 	}
 }
@@ -70,9 +72,22 @@ func (b *ConsumerBuilder) WithSubscriber(t bus.Subscriber) *ConsumerBuilder {
 	return b
 }
 
-// WithCommitMode sets the offset commit strategy.
-func (b *ConsumerBuilder) WithCommitMode(m CommitMode) *ConsumerBuilder {
-	b.commitMode = m
+// WithAckMode sets who settles a record with Kafka, and when.
+func (b *ConsumerBuilder) WithAckMode(m AckMode) *ConsumerBuilder {
+	b.ackMode = m
+	return b
+}
+
+// WithMaxInFlight bounds how far a partition's completions may run behind the
+// records handed out before the partition stops being fetched. Zero or less
+// means DefaultMaxInFlight.
+//
+// It is a bound on memory and on blast radius, not a throughput knob: the
+// records between a partition's low-water mark and its highest dispatched
+// offset are all reprocessed if this member loses the partition, so a very
+// large window trades duplicate work at a rebalance for nothing in particular.
+func (b *ConsumerBuilder) WithMaxInFlight(n int) *ConsumerBuilder {
+	b.maxInFlight = n
 	return b
 }
 
@@ -144,25 +159,6 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		topics[i] = sub.KafkaTopic
 	}
 
-	consumerOpts := make([]kgo.Opt, 0, len(b.baseOpts)+4)
-	consumerOpts = append(consumerOpts, b.baseOpts...)
-	consumerOpts = append(consumerOpts,
-		kgo.ConsumerGroup(b.groupID),
-		kgo.ConsumeTopics(topics...),
-		kgo.ConsumeResetOffset(b.startOffset),
-	)
-
-	// In CommitAfterProcess mode we call CommitRecords explicitly after each
-	// successfully processed record — disable franz-go's auto-commit.
-	if b.commitMode == CommitAfterProcess {
-		consumerOpts = append(consumerOpts, kgo.DisableAutoCommit())
-	}
-
-	client, err := kgo.NewClient(consumerOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("kafka consumer %q: create client: %w", b.groupID, err)
-	}
-
 	var meter metric.Meter
 	if b.meterProvider != nil {
 		meter = b.meterProvider.Meter("github.com/tsarna/vinculum-kafka/consumer")
@@ -173,15 +169,66 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 		wf = wire.Auto
 	}
 
-	return &KafkaConsumer{
-		client:        client,
+	c := &KafkaConsumer{
 		subscriptions: b.subscriptions,
 		subscriber:    b.subscriber,
-		commitMode:    b.commitMode,
+		ackMode:       b.ackMode,
 		dlqTopic:      b.dlqTopic,
 		wireFormat:    wf,
 		onDecodeError: b.onDecodeError,
 		logger:        b.logger,
 		metrics:       NewConsumerMetrics(b.clientName, meter),
-	}, nil
+	}
+
+	consumerOpts := make([]kgo.Opt, 0, len(b.baseOpts)+7)
+	consumerOpts = append(consumerOpts, b.baseOpts...)
+	consumerOpts = append(consumerOpts,
+		kgo.ConsumerGroup(b.groupID),
+		kgo.ConsumeTopics(topics...),
+		kgo.ConsumeResetOffset(b.startOffset),
+	)
+
+	// Under AckPeriodic offsets are franz-go's timer's business and there is
+	// nothing per-record to settle. Every other mode tracks its own low-water
+	// marks, so autocommit has to be off — leaving it on is what made the old
+	// commit_mode = "manual" an alias for periodic.
+	if b.ackMode != AckPeriodic {
+		c.tracker = newTracker(b.maxInFlight)
+
+		consumerOpts = append(consumerOpts,
+			kgo.DisableAutoCommit(),
+
+			// A rebalance in the middle of a fetch would hand a partition away
+			// while records from it were still being dispatched, so their
+			// settlers would be registered against an assignment that no longer
+			// exists. Blocking confines rebalances to the gap between polls, by
+			// which time every record of a fetch has a settler and the marks
+			// have been committed.
+			kgo.BlockRebalanceOnPoll(),
+
+			// A revoke is an orderly hand-off: commit what has completed, then
+			// forget the partitions so a settle still in flight for one reports
+			// that it was reassigned rather than moving a mark another member
+			// now owns.
+			kgo.OnPartitionsRevoked(func(ctx context.Context, cl *kgo.Client, revoked map[string][]int32) {
+				c.commitMarks(ctx)
+				c.dropPartitions(cl, revoked)
+			}),
+
+			// A loss is the same hand-off without the commit: the group has
+			// already moved on, so an offset written now would be for a
+			// partition someone else is consuming.
+			kgo.OnPartitionsLost(func(_ context.Context, cl *kgo.Client, lost map[string][]int32) {
+				c.dropPartitions(cl, lost)
+			}),
+		)
+	}
+
+	client, err := kgo.NewClient(consumerOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("kafka consumer %q: create client: %w", b.groupID, err)
+	}
+	c.client = client
+
+	return c, nil
 }
