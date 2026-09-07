@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	github.com/stretchr/testify v1.12.1
-	github.com/tsarna/vinculum-bus v0.19.0
+	github.com/tsarna/vinculum-bus v0.20.0
 	github.com/tsarna/vinculum-wire v0.5.0
 	github.com/twmb/franz-go v1.21.6
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260906002741-ab55e0424097
