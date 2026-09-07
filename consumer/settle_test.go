@@ -22,7 +22,7 @@ func settlingConsumer(mode AckMode) *KafkaConsumer {
 
 func TestAckAdvancesTheMark(t *testing.T) {
 	c := settlingConsumer(AckAfterHandling)
-	settler := c.newSettler(rec("t", 0, 7))
+	settler, _ := c.newSettler(rec("t", 0, 7))
 	require.NotNil(t, settler)
 
 	settled, err := settler.Ack(context.Background())
@@ -36,7 +36,7 @@ func TestAckAdvancesTheMark(t *testing.T) {
 
 func TestAckSettlesOnce(t *testing.T) {
 	c := settlingConsumer(AckManual)
-	settler := c.newSettler(rec("t", 0, 0))
+	settler, _ := c.newSettler(rec("t", 0, 0))
 
 	settled, err := settler.Ack(context.Background())
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestNackWithoutADLQLeavesTheMarkWhereItIs(t *testing.T) {
 	// only honest answer is to stop committing at it. Everything from it
 	// onwards is reprocessed by whoever next owns the partition.
 	c := settlingConsumer(AckManual)
-	settler := c.newSettler(rec("t", 0, 4))
+	settler, _ := c.newSettler(rec("t", 0, 4))
 	c.tracker.begin(rec("t", 0, 5))
 
 	settled, err := settler.Nack(context.Background(), "handler said no")
@@ -67,8 +67,8 @@ func TestNackDoesNotBlockLaterRecordsFromCompleting(t *testing.T) {
 	// The gap holds the mark; it does not stop work. A record above a refusal
 	// still completes, it just cannot be committed yet.
 	c := settlingConsumer(AckManual)
-	refused := c.newSettler(rec("t", 0, 0))
-	handled := c.newSettler(rec("t", 0, 1))
+	refused, _ := c.newSettler(rec("t", 0, 0))
+	handled, _ := c.newSettler(rec("t", 0, 1))
 
 	_, err := refused.Nack(context.Background(), "no")
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestNackDoesNotBlockLaterRecordsFromCompleting(t *testing.T) {
 
 func TestSettleAfterRevokeReportsStale(t *testing.T) {
 	c := settlingConsumer(AckManual)
-	settler := c.newSettler(rec("t", 0, 0))
+	settler, _ := c.newSettler(rec("t", 0, 0))
 
 	c.tracker.drop(map[string][]int32{"t": {0}})
 
@@ -96,22 +96,26 @@ func TestPeriodicRecordsCarryNoSettler(t *testing.T) {
 	// settle. A nil settler is what makes inbound::ack() report false rather
 	// than look like it worked.
 	c := settlingConsumer(AckPeriodic)
-	assert.Nil(t, c.newSettler(rec("t", 0, 0)))
+	settler, _ := c.newSettler(rec("t", 0, 0))
+	assert.Nil(t, settler)
 }
 
 func TestOnlyAfterHandlingSettlesAutomatically(t *testing.T) {
 	// Auto is what SettleOnReturn reads to decide whether a clean return
 	// acknowledges. Under manual it must not, or the configuration's decision
 	// would be pre-empted by the call that handed the record on.
-	assert.True(t, settlingConsumer(AckAfterHandling).newSettler(rec("t", 0, 0)).Auto())
-	assert.False(t, settlingConsumer(AckManual).newSettler(rec("t", 0, 0)).Auto())
+	auto, _ := settlingConsumer(AckAfterHandling).newSettler(rec("t", 0, 0))
+	assert.True(t, auto.Auto())
+	manual, _ := settlingConsumer(AckManual).newSettler(rec("t", 0, 0))
+	assert.False(t, manual.Auto())
 }
 
 func TestKeepaliveExtendsNothing(t *testing.T) {
 	// A Kafka record has no per-message lease to renew, and saying so is what
 	// lets shared handling call inbound::keepalive() against any receiver.
 	c := settlingConsumer(AckManual)
-	extended, err := c.newSettler(rec("t", 0, 0)).Keepalive(context.Background())
+	settler, _ := c.newSettler(rec("t", 0, 0))
+	extended, err := settler.Keepalive(context.Background())
 	require.NoError(t, err)
 	assert.False(t, extended)
 }
@@ -120,7 +124,7 @@ func TestSettlerTravelsOnTheContext(t *testing.T) {
 	// The settler reaches its consumers through the context and nothing else:
 	// fields are rewritten per subscription, so they cannot carry it.
 	c := settlingConsumer(AckAfterHandling)
-	settler := c.newSettler(rec("t", 0, 0))
+	settler, _ := c.newSettler(rec("t", 0, 0))
 
 	ctx := bus.WithSettler(context.Background(), settler)
 	assert.Same(t, settler, bus.SettlerFromContext(ctx))

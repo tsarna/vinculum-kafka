@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	bus "github.com/tsarna/vinculum-bus"
@@ -54,6 +56,12 @@ type TopicSubscription struct {
 //
 // KafkaConsumer is a source, not a sink — it does NOT implement bus.Subscriber.
 type KafkaConsumer struct {
+	// groupID names this consumer in everything it reports. A process runs one
+	// per `receiver` block and a teardown phase logs whichever failed, so a
+	// message that does not say which one leaves an operator with nothing to
+	// act on — the other receivers in this family all name their queue or
+	// stream, and this is the equivalent.
+	groupID       string
 	client        *kgo.Client
 	subscriptions []TopicSubscription
 	subscriber    bus.Subscriber
@@ -65,18 +73,147 @@ type KafkaConsumer struct {
 	logger        *zap.Logger
 	metrics       *ConsumerMetrics
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	// Two cancels, because stopping is two things and a graceful shutdown wants
+	// them apart. stopRead ends the poll loop; stopWork cancels the context
+	// every record and every settle rides on, and so is the one that ends the
+	// consumer. stopRead's context is derived from stopWork's, so cancelling
+	// work ends polling too.
+	mu       sync.Mutex
+	stopRead context.CancelFunc
+	stopWork context.CancelFunc
+	done     chan struct{}
+
+	// drained says this consumer has been told to stop consuming, and is the
+	// reason Start refuses afterwards. Set under mu, which is what makes it a
+	// guarantee rather than a hint.
+	drained bool
+
+	// unsettled counts records handed out and not yet settled. See Unsettled.
+	unsettled atomic.Int64
+
+	// stillDelivering is the channel a timed-out Drain was waiting on, closed
+	// when the loop finally finishes. Nil until the first drain, and set by
+	// every drain rather than only by one that gives up — what makes it answer
+	// "no" is the channel being closed, not the field being absent.
+	stillDelivering atomic.Pointer[chan struct{}]
+}
+
+// Unsettled reports how many records this consumer has handed out that nothing
+// has settled yet.
+//
+// It is not the tracker's in-flight window, which is `highest - base` and stays
+// wide while a refused record pins a partition's mark — deliberately, and
+// possibly forever. That number is about Kafka's offsets; this one is about
+// whether a settle is still coming, which is the narrower thing a shutdown can
+// usefully wait for. Under `ack = "periodic"` there is no settler and nothing
+// to count: franz-go's own timer owns the offsets.
+func (c *KafkaConsumer) Unsettled() int { return int(c.unsettled.Load()) }
+
+// stillRunning reports whether a delivery a drain gave up on is running *now*,
+// rather than whether one ever was.
+func (c *KafkaConsumer) stillRunning() bool {
+	ch := c.stillDelivering.Load()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-*ch:
+		return false
+	default:
+		return true
+	}
 }
 
 // Start launches the poll goroutine and returns immediately. The goroutine
 // runs until ctx is cancelled or Stop is called.
 func (c *KafkaConsumer) Start(ctx context.Context) error {
-	pollCtx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Refused after a drain, whether or not this consumer had started when the
+	// drain reached it. Taking the decision and the registration under one lock
+	// is what makes it a guarantee rather than advice — a drain landing between
+	// a caller's check and its call would otherwise put the process back to
+	// consuming during the phase that waits for it to have finished.
+	//
+	// It also covers the loop a timed-out Stop abandoned: that loop still owns
+	// `done`, and a second one over the top would leave the next Stop waiting
+	// forever on it. There is no way to reach that state except through a
+	// Drain, so this one flag answers for both.
+	//
+	// Checked before "already started", because after a drain it is the more
+	// specific and more useful answer: a drained consumer is still started
+	// until Stop runs, and reporting that would send a caller looking for a
+	// double-Start that did not happen.
+	if c.drained {
+		return fmt.Errorf("kafka consumer %q: drained, not restarting", c.groupID)
+	}
+	if c.stopWork != nil {
+		return fmt.Errorf("kafka consumer %q: already started", c.groupID)
+	}
+
+	workCtx, stopWork := context.WithCancel(ctx)
+	readCtx, stopRead := context.WithCancel(workCtx)
+	c.stopWork = stopWork
+	c.stopRead = stopRead
 	c.done = make(chan struct{})
-	go c.pollLoop(pollCtx)
+	go c.pollLoop(readCtx, workCtx, c.done)
 	return nil
+}
+
+// Drain stops polling for new records and waits for the loop to finish and
+// commit what it is holding. It leaves everything else alone: the client stays
+// open, the group session stays alive, and every settler already handed out
+// stays valid — so a record still travelling through a queue downstream settles
+// normally when the work lands, and the mark it moves is still committable.
+//
+// That is the whole difference between draining and stopping. Closing the
+// client leaves the group, which hands this consumer's partitions to somebody
+// else; the offsets not yet committed are then replayed there. Draining is what
+// lets the work in flight finish and be committed first.
+//
+// Bounded by ctx, which the caller sizes: delivery runs user-supplied work.
+//
+// Terminal for the consumer: Start refuses afterwards. Draining is a shutdown,
+// not a pause.
+//
+// Safe to call before Start, after Stop, or twice — though a second call after
+// one that timed out reports the timeout again rather than a clean drain, since
+// the record it gave up on is still being handled.
+func (c *KafkaConsumer) Drain(ctx context.Context) error {
+	c.mu.Lock()
+	c.drained = true
+
+	stopRead := c.stopRead
+	if stopRead == nil {
+		c.mu.Unlock()
+		if c.stillRunning() {
+			return fmt.Errorf("kafka consumer %q: still delivering", c.groupID)
+		}
+		return nil
+	}
+	c.stopRead = nil
+	stopRead()
+
+	done := c.done
+	// Published under the same lock that cleared stopRead, because the two
+	// together are what a concurrent second Drain reads. Between them it would
+	// see the field already taken and no waiter yet, and report a clean drain
+	// that has not happened.
+	if done != nil {
+		c.stillDelivering.Store(&done)
+	}
+	c.mu.Unlock()
+
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("kafka consumer %q: drain: %w", c.groupID, ctx.Err())
+	}
 }
 
 // Stop signals the poll goroutine to exit, waits for it to finish, commits
@@ -87,12 +224,52 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 // the time a receiver is stopped the pipeline in front of it has been drained,
 // so completions have landed that the loop exited before committing — and every
 // mark left behind is a record the next process handles a second time.
+// It waits for the loop, so a record still being handled finishes and settles
+// normally — with one exception. A Drain that timed out has already given that
+// record a bounded chance to finish, and it did not take it; waiting here would
+// hand the same expression a second wait with no bound at all. So Stop cancels
+// and reports rather than blocking, because the one thing a stuck action must
+// never be able to do is stop the process from exiting. Whether it is *still*
+// running is checked here rather than remembered from the drain, a whole phase
+// earlier.
 func (c *KafkaConsumer) Stop() error {
-	if c.cancel != nil {
-		c.cancel()
+	c.mu.Lock()
+	stopWork := c.stopWork
+	done := c.done
+	c.stopRead, c.stopWork = nil, nil
+	c.mu.Unlock()
+
+	if stopWork != nil {
+		// Cancelling work cancels polling with it: the read context is derived
+		// from this one, so a Stop that was not preceded by a Drain still ends
+		// the loop.
+		stopWork()
 	}
-	if c.done != nil {
-		<-c.done
+
+	abandoned := c.stillRunning()
+	if !abandoned && done != nil {
+		<-done
+	}
+
+	if abandoned && c.client != nil {
+		// The abandoned goroutine is not in a poll — it is in the dispatch
+		// between one, holding the poller registration a poll takes and the
+		// AllowRebalance at the end of the loop gives back. Under
+		// BlockRebalanceOnPoll that registration is what LeaveGroup waits on,
+		// so closing the client below would block on the same expression the
+		// drain already gave up on, and the bound would have bought nothing.
+		// Releasing it here is what lets the process leave.
+		//
+		// Calling it from here rather than from the poller is a contract
+		// violation by franz-go's own description, and it is tolerated rather
+		// than blessed: allowRebalance masks the poller count and broadcasts
+		// with no goroutine affinity, and unaddPoller guards the underflow when
+		// the abandoned loop eventually calls it too. The alternative is a
+		// process that cannot exit.
+		//
+		// A no-op under `ack = "periodic"`, which does not set
+		// BlockRebalanceOnPoll — so this needs no mode guard.
+		c.client.AllowRebalance()
 	}
 
 	if c.client != nil {
@@ -105,22 +282,51 @@ func (c *KafkaConsumer) Stop() error {
 
 		c.client.Close()
 	}
+
+	// Reported after the commit and the close, not instead of them. A record
+	// nobody finished still leaves marks worth committing and a client worth
+	// closing; what the caller needs to know is that the process left with work
+	// outstanding, which on Kafka means those offsets are replayed wherever the
+	// partitions land next.
+	//
+	// Worth naming, because it is new: on this path the abandoned loop is still
+	// live, so once its action finally returns it runs its own commit, its own
+	// lag update and one more poll — concurrently with, or after, the two above.
+	// All of that is safe rather than lucky: franz-go serialises commits behind
+	// its own mutex, and a poll on a closed client returns ErrClientClosed
+	// instead of touching anything. Every other path waits, so this is the one
+	// place two goroutines are in the client at once.
+	if abandoned {
+		return fmt.Errorf("kafka consumer %q: stopped with a record still being handled", c.groupID)
+	}
 	return nil
 }
 
-func (c *KafkaConsumer) pollLoop(ctx context.Context) {
-	defer close(c.done)
+// pollLoop reads records and dispatches them until reading is stopped.
+//
+// The two contexts are the same lifetime until a drain separates them. readCtx
+// bounds the poll and decides when the loop exits; workCtx is what every record
+// and every settle runs on, and outlives readCtx by the length of the shutdown.
+// Passing readCtx to a record would mean draining cancelled the work it was
+// waiting for, and cancelled the commit that work was about to earn.
+func (c *KafkaConsumer) pollLoop(readCtx, workCtx context.Context, done chan struct{}) {
+	defer close(done)
 
 	for {
 		// Bounding the poll is what gives the loop a heartbeat. A completion
 		// that lands after its poll returned has moved a mark nothing else will
 		// notice, and on a quiet topic an unbounded poll would sit on it until
 		// the next record arrived. Everything below runs either way.
-		pollCtx, cancel := context.WithTimeout(ctx, commitInterval)
+		pollCtx, cancel := context.WithTimeout(readCtx, commitInterval)
 		fetches := c.client.PollFetches(pollCtx)
 		cancel()
 
-		if ctx.Err() != nil {
+		if workCtx.Err() != nil {
+			// A hard stop, and the one case where records this poll returned
+			// are abandoned: the context they would be handled on is already
+			// cancelled, so handling them would fail and settling them would
+			// fail after that. They are uncommitted, so they are replayed.
+			//
 			// Under BlockRebalanceOnPoll a poll registers this goroutine as a
 			// poller and nothing in the group may move until it says otherwise
 			// — including leaving the group. Returning without this deadlocks
@@ -131,8 +337,11 @@ func (c *KafkaConsumer) pollLoop(ctx context.Context) {
 
 		// A deadline is this loop's own heartbeat, not a fetch failure: franz-go
 		// injects the context error as a fake fetch, and reporting it would log
-		// once every commitInterval on an idle topic.
-		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		// once every commitInterval on an idle topic. A cancellation is the
+		// same kind of non-event, and is how a drain ends the poll it
+		// interrupted.
+		if err := fetches.Err(); err != nil &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			c.logger.Error("kafka consumer: poll error", zap.Error(err))
 			// continue — transient errors should not kill the loop
 		}
@@ -143,17 +352,43 @@ func (c *KafkaConsumer) pollLoop(ctx context.Context) {
 		// see. Reporting again from here would say the same thing twice about
 		// the subset that happened to fail in front of it.
 		fetches.EachRecord(func(r *kgo.Record) {
-			_ = c.processRecord(ctx, r)
+			_ = c.processRecord(workCtx, r)
 		})
 
-		c.commitMarks(ctx)
+		c.commitMarks(workCtx)
 		c.applyPressure()
-		c.updateLag(ctx, fetches)
+		c.updateLag(workCtx, fetches)
 
 		// Paired with BlockRebalanceOnPoll: a rebalance may only happen between
 		// polls, so every record from this fetch has been dispatched and its
 		// settler registered before the group can take a partition away.
 		c.client.AllowRebalance()
+
+		// Checked here rather than beside the hard stop above, and that
+		// placement is the whole of what draining adds. A drain cancels the
+		// read context while a poll is in flight, so the poll returns whatever
+		// it had — and testing for it before dispatch would throw those records
+		// away. They are dispatched, they settle, and the marks they move are
+		// committed by the call above; only then does the loop leave.
+		//
+		// It leaves only on a poll that produced nothing, which is not
+		// impatience but franz-go's bookkeeping. Under default autocommit —
+		// `ack = "periodic"`, the one mode that uses it — a poll's offsets are
+		// recorded as *dirty* and promoted to committable at the start of the
+		// *next* poll. That one-poll lag is deliberate on franz-go's part and
+		// is what makes its autocommit at-least-once. Leaving straight after
+		// dispatching a fetch would strand that fetch's offsets dirty, and the
+		// records would be handled a second time by the next process — a
+		// shutdown quietly reintroducing the duplicates it exists to avoid.
+		//
+		// One further round is all it ever takes. A poll on a cancelled context
+		// returns before franz-go fills it, so it can only come back empty —
+		// but it promotes first, which is the whole reason for making it. The
+		// records franz-go still holds buffered are neither dirty nor head, so
+		// they are simply replayed.
+		if readCtx.Err() != nil && fetches.NumRecords() == 0 {
+			return
+		}
 	}
 }
 
@@ -338,7 +573,7 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	// Registered before anything can fail, so every path below has something to
 	// settle. A record rejected here never reaches the configuration, so the
 	// configuration cannot be what answers for it.
-	settler := c.newSettler(r)
+	settler, ops := c.newSettler(r)
 
 	fields := headersToFields(r.Headers)
 	var key *string
@@ -438,6 +673,16 @@ func (c *KafkaConsumer) processRecord(ctx context.Context, r *kgo.Record) error 
 	// nothing — offsets move on franz-go's timer — so the dead letter that mode
 	// still owes is issued below.
 	bus.SettleOnReturn(recCtx, c.subscriber, err)
+
+	// An observing subscriber settles nothing and defers to nobody — it saw the
+	// record go past. SettleOnReturn returns without acting, so no settle is
+	// coming from anywhere and this record has to be released by hand or the
+	// count never comes back down. It is the only path through here that
+	// reaches no settler at all: every failure above nacks, and a nack
+	// releases.
+	if ops != nil && bus.DispositionOf(c.subscriber) == bus.Observed {
+		ops.release()
+	}
 
 	if err != nil {
 		// The nack above reports the failure, so nothing is logged here. The

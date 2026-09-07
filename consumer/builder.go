@@ -170,6 +170,7 @@ func (b *ConsumerBuilder) Build() (*KafkaConsumer, error) {
 	}
 
 	c := &KafkaConsumer{
+		groupID:       b.groupID,
 		subscriptions: b.subscriptions,
 		subscriber:    b.subscriber,
 		ackMode:       b.ackMode,

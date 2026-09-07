@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Drain`, so a consumer can stop reading without stopping.** Stopping used
+  to be one action: cancel everything and close the client. That is the wrong
+  shape for a graceful shutdown, where a process wants to stop *accepting*
+  records long before it stops being able to commit them.
+
+  `Drain(ctx)` ends the fetch loop and waits for the records in hand to finish
+  delivering. Everything else is left alone: the client stays open, settlers
+  already handed out stay valid, and a record still travelling through a queue
+  downstream marks itself complete normally when it lands. `Stop` then commits
+  and closes afterwards, with nothing left owed.
+
+  The loop takes one more poll on its way out, deliberately. franz-go's
+  autocommit marks offsets dirty as records are fetched and promotes them at
+  the *start* of the next poll, so a loop that returned the moment its context
+  was cancelled would strand everything it had just finished — and the next
+  boot would reprocess all of it. The exit is therefore "cancelled *and* the
+  fetch came back empty".
+
+- **`Unsettled`, the count of deliveries nothing has settled yet.** Not the
+  distance between the committed offset and the log end: a record behind an
+  unsettled one is held back by the low-water mark and will be redelivered.
+  This is the narrower number a shutdown can usefully wait for — completions
+  that are still coming.
+
+### Changed
+
+- **`Stop` no longer waits without a bound after a drain that timed out.** The
+  drain has already given that delivery a bounded chance to finish and it did
+  not take it; waiting again, with no bound and nothing to interrupt it, would
+  let one stuck action stop the process from exiting. `Stop` cancels, releases
+  the rebalance lock the abandoned poll was holding — without which `Close`
+  itself deadlocks — and reports. Whether the delivery is *still* running is
+  checked when `Stop` asks rather than remembered from the drain, since a whole
+  shutdown phase separates the two and the answer usually changes in between.
+
+- **`Start` refuses to restart a consumer whose previous delivery is still
+  running**, rather than starting a second loop over the top of it.
+
 ## [0.14.0] - 2026-09-04
 
 ### Added

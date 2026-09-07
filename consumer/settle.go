@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"sync/atomic"
 
 	bus "github.com/tsarna/vinculum-bus"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -50,6 +51,24 @@ type recordSettleOps struct {
 
 	key partitionKey
 	gen uint64
+
+	// released guards the consumer's unsettled count against being decremented
+	// twice for one record. The settler above deduplicates settles, but it
+	// releases its claim when an op returns an error, so a failed dead-letter
+	// send can be retried and reach Nack a second time.
+	released atomic.Bool
+}
+
+// release drops this record from the consumer's unsettled count, once.
+//
+// It runs even when the op that called it failed. A record whose dead-letter
+// send did not land is genuinely still unsettled, but the count exists to tell
+// a shutdown when to stop waiting, and waiting longer for a broker that is
+// refusing produces does not produce a settle.
+func (o *recordSettleOps) release() {
+	if o.released.CompareAndSwap(false, true) {
+		o.c.unsettled.Add(-1)
+	}
 }
 
 // Ack marks the record complete, which advances the partition's low-water mark
@@ -57,6 +76,7 @@ type recordSettleOps struct {
 // here: the mark is committed by the poll loop, so an offset moves on one
 // goroutine however many settle from elsewhere.
 func (o *recordSettleOps) Ack(_ context.Context) error {
+	defer o.release()
 	o.c.tracker.complete(o.key, o.rec.Offset, o.rec.LeaderEpoch, o.gen)
 	return nil
 }
@@ -86,6 +106,12 @@ func (o *recordSettleOps) Ack(_ context.Context) error {
 // that reach here discard what a nack returns. This is the one place all of
 // them pass through.
 func (o *recordSettleOps) Nack(ctx context.Context, reason string) error {
+	// Released whichever way this goes, including the branch that deliberately
+	// leaves the mark where it is. The partition's committed offset stopping
+	// here is Kafka's business and permanent; what the count tracks is whether
+	// a settle is still coming, and after a nack none is.
+	defer o.release()
+
 	if o.c.dlqTopic == "" {
 		o.c.logger.Warn("kafka consumer: record refused and there is no dlq_topic; "+
 			"the partition's committed offset stops here",
@@ -135,8 +161,27 @@ func (o *recordSettleOps) Keepalive(_ context.Context) (bool, error) {
 //
 // A window can also be retired without the partition moving, when the log is
 // truncated or expires beneath it; the tracker says which of the two happened.
+// Saying no is also where the record stops being this consumer's to settle, so
+// it is where the unsettled count lets go of it. The settler asks this before
+// every settle *and before every keepalive*, and abandons the record when the
+// answer is no — never reaching Ack or Nack, and so never reaching the release
+// those two carry. Without this the count would keep a record whose partition
+// has gone to another member, and keep it forever: every later shutdown would
+// then spend its whole budget waiting for a settle that cannot be made.
+//
+// Two callers means this can fire twice for one record — a keepalive that finds
+// it stale, then a settle that finds the same — which is one of the two reasons
+// release is guarded rather than a plain decrement.
+//
+// A partition is never handed back to the same generation, so a record left
+// behind once is never valid again — which is what makes releasing here final
+// rather than premature.
 func (o *recordSettleOps) Valid() (bool, string) {
-	return o.c.tracker.valid(o.key, o.gen)
+	ok, reason := o.c.tracker.valid(o.key, o.gen)
+	if !ok {
+		o.release()
+	}
+	return ok, reason
 }
 
 // newSettler returns the settler for one record, or nil where there is nothing
@@ -151,9 +196,14 @@ func (o *recordSettleOps) Valid() (bool, string) {
 //
 // Under AckAfterHandling the settler is marked as settled by the framework,
 // which is what makes the acknowledgement follow the work rather than the call.
-func (c *KafkaConsumer) newSettler(r *kgo.Record) bus.Settler {
+// Handing one out is what makes the record unsettled, so the count is
+// incremented here rather than at the record's other end. Teardown waits on
+// that count: a record a `queue_size` queue is still carrying settles long
+// after the poll that read it has stopped, and the mark it moves has to be
+// committed before the client leaves the group.
+func (c *KafkaConsumer) newSettler(r *kgo.Record) (bus.Settler, *recordSettleOps) {
 	if c.tracker == nil {
-		return nil
+		return nil, nil
 	}
 
 	key := partitionKey{r.Topic, r.Partition}
@@ -163,10 +213,11 @@ func (c *KafkaConsumer) newSettler(r *kgo.Record) bus.Settler {
 		key: key,
 		gen: c.tracker.begin(r),
 	}
+	c.unsettled.Add(1)
 	if c.ackMode == AckAfterHandling {
-		return bus.NewSettler(ops, bus.AutoSettle())
+		return bus.NewSettler(ops, bus.AutoSettle()), ops
 	}
-	return bus.NewSettler(ops)
+	return bus.NewSettler(ops), ops
 }
 
 // nackOwn settles a failure this receiver is answering for itself: a record
