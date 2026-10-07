@@ -6,7 +6,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/tsarna/vinculum-bus v0.20.0
 	github.com/tsarna/vinculum-wire v0.5.0
-	github.com/twmb/franz-go v1.22.0
+	github.com/twmb/franz-go v1.22.1
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260918165059-79db0ce448c6
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
 	go.opentelemetry.io/otel v1.47.0
