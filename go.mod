@@ -7,9 +7,8 @@ require (
 	github.com/tsarna/vinculum-bus v0.20.0
 	github.com/tsarna/vinculum-wire v0.5.0
 	github.com/twmb/franz-go v1.22.1
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260918165059-79db0ce448c6
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20261007040850-d3792b34935a
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
-	github.com/twmb/franz-go/pkg/kmsg/v2 v2.0.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
