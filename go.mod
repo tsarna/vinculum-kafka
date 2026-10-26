@@ -9,6 +9,7 @@ require (
 	github.com/twmb/franz-go v1.22.2
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20261022190701-123ec885bc97
 	github.com/twmb/franz-go/pkg/kmsg v1.15.0
+	github.com/twmb/franz-go/pkg/kmsg/v2 v2.0.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
