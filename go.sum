@@ -27,8 +27,11 @@ github.com/twmb/franz-go/pkg/kadm v1.18.0 h1:WRf/LZmDdcDXwX7WMbtDU++v+b3NzYh2bCG
 github.com/twmb/franz-go/pkg/kadm v1.18.0/go.mod h1:XeLhGoLXLFzK8/ryv5FfpxPxGwj4oFEGpPJMB/x6KDE=
 github.com/twmb/franz-go/pkg/kfake v0.0.0-20261124225310-6c9261d4443a h1:jcPyLJH833klG3nR4FJbYusa/MB36E0zrU6VkNA2WbI=
 github.com/twmb/franz-go/pkg/kfake v0.0.0-20261124225310-6c9261d4443a/go.mod h1:HMiZ0NoKeqBbmnF3BRM74siT8nEGqWejQYShFZq2sMk=
+github.com/twmb/franz-go/pkg/kmsg v1.15.1 h1:3sj7ekbH33t73nsBcHS0wtp/PyMIViHLNItZrE8V9zM=
+github.com/twmb/franz-go/pkg/kmsg v1.15.1/go.mod h1:sGkGxKexpRLBThFHJLjjywcyfkK09qB/g+X+wFWZQ/A=
 github.com/twmb/franz-go/pkg/kmsg v1.15.2 h1:uqpiNaTc2xbXNPXu1xFrOuUkQKwkwRmy43lOQINpqk0=
 github.com/twmb/franz-go/pkg/kmsg v1.15.2/go.mod h1:sGkGxKexpRLBThFHJLjjywcyfkK09qB/g+X+wFWZQ/A=
+github.com/twmb/franz-go/pkg/kmsg/v2 v2.0.1/go.mod h1:6OeA4WSQXVfDmkVW65VZJn0Xg7HT5ApIn+XB1fSpuWQ=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.47.0 h1:j7ALJ/zgkS7Z6aeJW09p8VC9804bC+PpeTfCD4XPnOM=
